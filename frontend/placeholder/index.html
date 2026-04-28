@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CloudSLA Recommender</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --accent: #2563eb; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .tab-btn { transition: all .15s; }
+    .tab-btn.active { background: #2563eb; color: #fff; }
+    .tab-btn:not(.active):hover { background: #e0e7ff; }
+    .card { background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+    .badge { display:inline-flex; align-items:center; padding:2px 10px; border-radius:999px; font-size:.72rem; font-weight:600; }
+    .badge-green  { background:#dcfce7; color:#166534; }
+    .badge-blue   { background:#dbeafe; color:#1e40af; }
+    .badge-red    { background:#fee2e2; color:#991b1b; }
+    .badge-yellow { background:#fef9c3; color:#854d0e; }
+    .badge-gray   { background:#f1f5f9; color:#475569; }
+    .badge-orange { background:#fff7ed; color:#c2410c; }
+    .badge-indigo { background:#e0e7ff; color:#3730a3; }
+    .msg-user { background:#2563eb; color:#fff; border-radius:18px 18px 4px 18px; }
+    .msg-bot  { background:#f1f5f9; color:#1e293b; border-radius:18px 18px 18px 4px; }
+    .drop-zone { border:2px dashed #93c5fd; border-radius:12px; transition:border-color .2s,background .2s; }
+    .drop-zone.drag-over { border-color:#2563eb; background:#eff6ff; }
+    .score-bar { height:8px; border-radius:4px; background:#e2e8f0; overflow:hidden; }
+    .score-fill { height:100%; border-radius:4px; background: linear-gradient(90deg,#3b82f6,#6366f1); transition:width .6s ease; }
+    #toast { transition:opacity .3s,transform .3s; }
+    .spinner { border:3px solid #e2e8f0; border-top-color:#2563eb; border-radius:50%; width:24px; height:24px; animation:spin .7s linear infinite; display:inline-block; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .source-card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; }
+    select, input[type=text], textarea {
+      border:1px solid #cbd5e1; border-radius:8px; padding:8px 12px;
+      outline:none; font-size:.9rem; width:100%;
+      transition:border-color .15s;
+    }
+    select:focus, input[type=text]:focus, textarea:focus { border-color:#2563eb; box-shadow:0 0 0 3px #dbeafe; }
+    button.primary { background:#2563eb; color:#fff; border-radius:8px; padding:9px 20px; font-weight:600; font-size:.9rem; border:none; cursor:pointer; transition:background .15s; }
+    button.primary:hover { background:#1d4ed8; }
+    button.primary:disabled { background:#93c5fd; cursor:not-allowed; }
+    button.secondary { background:#f1f5f9; color:#1e293b; border-radius:8px; padding:9px 20px; font-weight:600; font-size:.9rem; border:1px solid #e2e8f0; cursor:pointer; transition:background .15s; }
+    button.secondary:hover { background:#e2e8f0; }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<!-- Toast -->
+<div id="toast" class="fixed top-5 right-5 z-50 opacity-0 translate-y-[-8px] pointer-events-none">
+  <div id="toast-inner" class="px-4 py-3 rounded-lg text-sm font-medium shadow-lg"></div>
+</div>
+
+<!-- Header -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">C</div>
+      <span class="font-semibold text-slate-800 text-lg">CloudSLA Recommender</span>
+    </div>
+    <div id="health-dot" class="flex items-center gap-2 text-xs text-slate-500">
+      <span class="w-2 h-2 rounded-full bg-slate-300 inline-block" id="health-indicator"></span>
+      <span id="health-label">checking…</span>
+    </div>
+  </div>
+</header>
+
+<!-- Nav tabs -->
+<div class="max-w-6xl mx-auto px-6 pt-6">
+  <div class="flex gap-2 mb-6 flex-wrap">
+    <button class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium" data-tab="upload">Upload SLA</button>
+    <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="query">Recommend</button>
+    <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="compare">Compare</button>
+    <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="chat">Chat with SLA</button>
+    <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="pricing">💰 Pricing</button>
+  </div>
+
+  <!-- ═══════════════ UPLOAD TAB ═══════════════ -->
+  <div id="tab-upload" class="tab-pane">
+    <div id="upload-success-banner" class="hidden mb-4 rounded-xl bg-green-50 border border-green-200 px-5 py-4 flex items-start gap-3">
+      <span class="text-green-500 text-xl mt-0.5">✓</span>
+      <div class="flex-1">
+        <p class="font-semibold text-green-800 text-sm" id="success-banner-title">Upload successful!</p>
+        <p class="text-green-700 text-xs mt-0.5" id="success-banner-body"></p>
+      </div>
+      <button onclick="document.getElementById('upload-success-banner').classList.add('hidden')" class="text-green-400 hover:text-green-600 text-lg leading-none">×</button>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="card p-6">
+        <h2 class="font-semibold text-slate-800 mb-5 text-base">Upload SLA Documents</h2>
+        <label class="block text-xs font-medium text-slate-600 mb-2">Step 1 — Select Provider Category</label>
+        <div class="grid grid-cols-3 gap-2 mb-3" id="provider-cards">
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="AWS" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">☁</div><div class="text-xs font-semibold text-slate-700">AWS</div>
+          </div>
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Azure" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">🔷</div><div class="text-xs font-semibold text-slate-700">Azure</div>
+          </div>
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="GCP" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">🌐</div><div class="text-xs font-semibold text-slate-700">GCP</div>
+          </div>
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Oracle" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">🔴</div><div class="text-xs font-semibold text-slate-700">Oracle</div>
+          </div>
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="IBM" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">💙</div><div class="text-xs font-semibold text-slate-700">IBM</div>
+          </div>
+          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="__custom__" onclick="selectProviderCard(this)">
+            <div class="text-lg mb-0.5">✏️</div><div class="text-xs font-semibold text-slate-700">Custom</div>
+          </div>
+        </div>
+        <input type="text" id="upload-provider-custom" placeholder="Enter provider name…" class="mb-4 hidden" oninput="checkUploadReady()" />
+
+        <label class="block text-xs font-medium text-slate-600 mb-2">Step 2 — Choose Input Method</label>
+        <div class="flex gap-2 mb-3">
+          <button id="mode-pdf-btn" onclick="setInputMode('pdf')"
+            class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-blue-500 bg-blue-50 text-blue-700 transition-all">
+            📄 Upload PDF
+          </button>
+          <button id="mode-url-btn" onclick="setInputMode('url')"
+            class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-slate-200 text-slate-600 hover:border-blue-400 transition-all">
+            🔗 Paste URL
+          </button>
+        </div>
+
+        <!-- PDF mode -->
+        <div id="input-pdf-mode">
+          <div id="drop-zone" class="drop-zone p-6 text-center mb-3 cursor-pointer" onclick="document.getElementById('file-input').click()">
+            <div class="text-3xl mb-1">📂</div>
+            <p class="text-sm text-slate-600 font-medium">Drag & drop PDFs here, or click to browse</p>
+            <p class="text-xs text-slate-400 mt-1">Multiple PDF files supported</p>
+          </div>
+          <input type="file" id="file-input" accept=".pdf" multiple class="hidden" />
+          <div id="file-queue" class="space-y-2 mb-4 hidden">
+            <p class="text-xs font-medium text-slate-500">Files to upload:</p>
+            <div id="file-queue-list" class="space-y-1.5 max-h-40 overflow-y-auto"></div>
+          </div>
+        </div>
+
+        <!-- URL mode -->
+        <div id="input-url-mode" class="hidden mb-4">
+          <p class="text-xs text-slate-500 mb-2">Paste a direct link to a PDF or an SLA webpage. The page will be fetched and analysed automatically.</p>
+          <div id="url-queue" class="space-y-2 mb-3"></div>
+          <div class="flex gap-2">
+            <input type="text" id="url-input" placeholder="https://example.com/sla.pdf or SLA page URL…" class="flex-1" onkeydown="if(event.key==='Enter')addUrlToQueue()" />
+            <button class="secondary px-3 text-xs" onclick="addUrlToQueue()">Add</button>
+          </div>
+        </div>
+
+        <button class="primary w-full" id="upload-btn" disabled onclick="doUploadAll()">Ingest All</button>
+      </div>
+      <div class="card p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold text-slate-800 text-base">Ingested Documents</h2>
+          <button class="secondary text-xs py-1.5 px-3" onclick="loadProviders()">Refresh</button>
+        </div>
+        <div id="provider-list" class="space-y-2"><p class="text-sm text-slate-400">Loading…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ QUERY TAB ═══════════════ -->
+  <div id="tab-query" class="tab-pane hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- Query input -->
+      <div class="card p-6 lg:col-span-1">
+        <h2 class="font-semibold text-slate-800 mb-4 text-base">Describe Your Requirements</h2>
+        <textarea id="query-text" rows="5" placeholder="e.g. I need 99.99% uptime with HIPAA compliance for a healthcare app in Europe, budget around $2000/month" class="mb-4 resize-none"></textarea>
+
+        <details class="mb-4">
+          <summary class="text-xs font-medium text-slate-500 cursor-pointer mb-2">Advanced: adjust weights</summary>
+          <div class="space-y-2 mt-2">
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-600 w-28">Uptime</label>
+              <input type="range" min="0" max="1" step="0.05" value="0.35" id="w-uptime" class="flex-1" oninput="updateWeight(this,'w-uptime-val')">
+              <span id="w-uptime-val" class="text-xs w-8 text-right">0.35</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-600 w-28">RTO</label>
+              <input type="range" min="0" max="1" step="0.05" value="0.25" id="w-rto" class="flex-1" oninput="updateWeight(this,'w-rto-val')">
+              <span id="w-rto-val" class="text-xs w-8 text-right">0.25</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-600 w-28">Support</label>
+              <input type="range" min="0" max="1" step="0.05" value="0.15" id="w-support" class="flex-1" oninput="updateWeight(this,'w-support-val')">
+              <span id="w-support-val" class="text-xs w-8 text-right">0.15</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-600 w-28">Penalty</label>
+              <input type="range" min="0" max="1" step="0.05" value="0.15" id="w-penalty" class="flex-1" oninput="updateWeight(this,'w-penalty-val')">
+              <span id="w-penalty-val" class="text-xs w-8 text-right">0.15</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-600 w-28">Regions</label>
+              <input type="range" min="0" max="1" step="0.05" value="0.10" id="w-regions" class="flex-1" oninput="updateWeight(this,'w-regions-val')">
+              <span id="w-regions-val" class="text-xs w-8 text-right">0.10</span>
+            </div>
+          </div>
+        </details>
+
+        <button class="primary w-full" id="query-btn" onclick="doQuery()">Get Recommendations</button>
+        <div id="query-spinner" class="hidden flex justify-center mt-4"><div class="spinner"></div></div>
+      </div>
+
+      <!-- Results -->
+      <div class="lg:col-span-2">
+        <div id="query-results" class="space-y-4">
+          <div class="card p-8 text-center text-slate-400 text-sm">
+            Results will appear here after you submit a query.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ COMPARE TAB ═══════════════ -->
+  <div id="tab-compare" class="tab-pane hidden">
+    <div class="card p-6">
+      <h2 class="font-semibold text-slate-800 mb-4 text-base">Compare Providers Side-by-Side</h2>
+      <div class="flex gap-3 mb-6 flex-wrap">
+        <div id="compare-checkboxes" class="flex gap-3 flex-wrap flex-1">
+          <p class="text-sm text-slate-400">Loading providers…</p>
+        </div>
+        <button class="primary" onclick="doCompare()">Compare</button>
+      </div>
+      <div id="compare-results" class="overflow-x-auto"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ CHAT TAB ═══════════════ -->
+  <div id="tab-chat" class="tab-pane hidden">
+    <div class="card flex flex-col" style="height:calc(100vh - 200px); min-height:500px;">
+
+      <!-- Chat header -->
+      <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+        <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-sm">AI</div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">SLA Assistant</p>
+          <p class="text-xs text-slate-400">Ask anything about your uploaded SLA documents</p>
+        </div>
+        <div class="ml-auto">
+          <label class="text-xs text-slate-500 mr-1">Filter provider:</label>
+          <select id="chat-provider-filter" style="width:auto;padding:4px 8px;font-size:.8rem;">
+            <option value="">All providers</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="chat-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div class="flex gap-3">
+          <div class="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 text-xs font-bold shrink-0 mt-0.5">AI</div>
+          <div class="msg-bot px-4 py-3 text-sm max-w-lg">
+            Hello! I can answer questions about your uploaded SLA documents.<br><br>
+            Try asking things like:<br>
+            <span class="text-blue-600 cursor-pointer hover:underline" onclick="fillChat('What is the uptime SLA guarantee?')">• What is the uptime SLA guarantee?</span><br>
+            <span class="text-blue-600 cursor-pointer hover:underline" onclick="fillChat('What compensation do I get for downtime?')">• What compensation do I get for downtime?</span><br>
+            <span class="text-blue-600 cursor-pointer hover:underline" onclick="fillChat('What compliance certifications are covered?')">• What compliance certifications are covered?</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <div class="px-6 py-4 border-t border-slate-100">
+        <div class="flex gap-3">
+          <textarea id="chat-input" rows="2" placeholder="Ask a question about the SLA documents…"
+            class="flex-1 resize-none"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();doAsk();}"></textarea>
+          <button class="primary px-5" id="ask-btn" onclick="doAsk()">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ PRICING TAB ═══════════════ -->
+  <div id="tab-pricing" class="tab-pane hidden">
+    <div class="card p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-semibold text-slate-800 text-base">Provider Pricing</h2>
+        <button class="secondary text-xs py-1.5 px-3" onclick="loadPricing()">Refresh</button>
+      </div>
+      <div id="pricing-results">
+        <p class="text-sm text-slate-400">Click Refresh to load cached pricing data.</p>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /max-w-6xl -->
+
+<div class="h-12"></div>
+
+<script>
+const API = 'http://localhost:8000';
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function toast(msg, type='info') {
+  const el = document.getElementById('toast');
+  const inner = document.getElementById('toast-inner');
+  const colors = { info:'bg-slate-800 text-white', success:'bg-green-600 text-white', error:'bg-red-600 text-white' };
+  inner.className = `px-4 py-3 rounded-lg text-sm font-medium shadow-lg ${colors[type]||colors.info}`;
+  inner.textContent = msg;
+  el.classList.remove('opacity-0','translate-y-[-8px]','pointer-events-none');
+  el.classList.add('opacity-100','translate-y-0');
+  setTimeout(() => {
+    el.classList.add('opacity-0','translate-y-[-8px]','pointer-events-none');
+    el.classList.remove('opacity-100','translate-y-0');
+  }, 3500);
+}
+
+async function apiFetch(path, opts={}) {
+  const res = await fetch(API + path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || res.statusText);
+  }
+  return res.json();
+}
+
+function updateWeight(input, valId) {
+  document.getElementById(valId).textContent = parseFloat(input.value).toFixed(2);
+}
+
+// ── Health check ─────────────────────────────────────────────────────────────
+
+async function checkHealth() {
+  try {
+    await apiFetch('/health');
+    document.getElementById('health-indicator').className = 'w-2 h-2 rounded-full bg-green-500 inline-block';
+    document.getElementById('health-label').textContent = 'API online';
+  } catch {
+    document.getElementById('health-indicator').className = 'w-2 h-2 rounded-full bg-red-500 inline-block';
+    document.getElementById('health-label').textContent = 'API offline';
+  }
+}
+
+// ── Tab navigation ────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.add('hidden'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+    if (btn.dataset.tab === 'compare') loadCompareCheckboxes();
+    if (btn.dataset.tab === 'pricing') loadPricing();
+  });
+});
+
+// ── UPLOAD TAB ───────────────────────────────────────────────────────────────
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+let fileQueue = []; // [{file, status, msg}]
+let urlQueue  = []; // [{url, status, msg}]
+let selectedProvider = '';
+let inputMode = 'pdf'; // 'pdf' | 'url'
+
+function setInputMode(mode) {
+  inputMode = mode;
+  document.getElementById('input-pdf-mode').classList.toggle('hidden', mode !== 'pdf');
+  document.getElementById('input-url-mode').classList.toggle('hidden', mode !== 'url');
+  document.getElementById('mode-pdf-btn').className =
+    `flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all ${mode==='pdf' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
+  document.getElementById('mode-url-btn').className =
+    `flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all ${mode==='url' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
+  checkUploadReady();
+}
+
+// ── URL queue ────────────────────────────────────────────────────────────────
+
+function addUrlToQueue() {
+  const input = document.getElementById('url-input');
+  const raw = input.value.trim();
+  if (!raw) return;
+  try { new URL(raw); } catch { toast('Please enter a valid URL.', 'error'); return; }
+  if (urlQueue.find(q => q.url === raw)) { toast('URL already in queue.', 'info'); return; }
+  urlQueue.push({ url: raw, status: 'pending', msg: '' });
+  input.value = '';
+  renderUrlQueue();
+  checkUploadReady();
+}
+
+function removeUrlFromQueue(url) {
+  urlQueue = urlQueue.filter(q => q.url !== url);
+  renderUrlQueue();
+  checkUploadReady();
+}
+
+function renderUrlQueue() {
+  const el = document.getElementById('url-queue');
+  if (!urlQueue.length) { el.innerHTML = ''; return; }
+  el.innerHTML = urlQueue.map((q, i) => {
+    const icon = { pending:'⏳', uploading:'🔄', done:'✅', error:'❌' }[q.status];
+    const color = { pending:'text-slate-500', uploading:'text-blue-500', done:'text-green-600', error:'text-red-500' }[q.status];
+    const short = q.url.length > 55 ? q.url.slice(0, 52) + '…' : q.url;
+    return `<div class="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 text-xs">
+      <span class="text-base leading-none">${icon}</span>
+      <span class="flex-1 truncate text-slate-700 font-medium" title="${q.url}">${short}</span>
+      ${q.status === 'pending' ? `<button onclick="removeUrlFromQueue('${q.url.replace(/'/g, "\\'")}')" class="text-slate-400 hover:text-red-500 font-bold">×</button>` : ''}
+      ${q.msg ? `<span class="${color}">${q.msg}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ── Provider card selection ───────────────────────────────────────────────────
+
+// Provider card selection
+function selectProviderCard(el) {
+  document.querySelectorAll('.provider-card').forEach(c => {
+    c.classList.remove('border-blue-500','bg-blue-50');
+    c.classList.add('border-slate-200');
+  });
+  el.classList.add('border-blue-500','bg-blue-50');
+  el.classList.remove('border-slate-200');
+  const custom = document.getElementById('upload-provider-custom');
+  if (el.dataset.val === '__custom__') {
+    custom.classList.remove('hidden');
+    custom.focus();
+    selectedProvider = custom.value.trim();
+  } else {
+    custom.classList.add('hidden');
+    selectedProvider = el.dataset.val;
+  }
+  checkUploadReady();
+}
+
+document.getElementById('upload-provider-custom').addEventListener('input', function() {
+  selectedProvider = this.value.trim();
+  checkUploadReady();
+});
+
+// Drag & drop
+['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => {
+  ev.preventDefault(); dropZone.classList.add('drag-over');
+}));
+['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => {
+  ev.preventDefault(); dropZone.classList.remove('drag-over');
+}));
+dropZone.addEventListener('drop', ev => {
+  const files = [...ev.dataTransfer.files].filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (files.length) addFilesToQueue(files);
+  else toast('Only PDF files are supported.', 'error');
+});
+fileInput.addEventListener('change', () => {
+  const files = [...fileInput.files];
+  if (files.length) addFilesToQueue(files);
+  fileInput.value = '';
+});
+
+function addFilesToQueue(files) {
+  files.forEach(f => {
+    if (!fileQueue.find(q => q.file.name === f.name))
+      fileQueue.push({ file: f, status: 'pending', msg: '' });
+  });
+  renderQueue();
+  checkUploadReady();
+}
+
+function removeFromQueue(name) {
+  fileQueue = fileQueue.filter(q => q.file.name !== name);
+  renderQueue();
+  checkUploadReady();
+}
+
+function renderQueue() {
+  const container = document.getElementById('file-queue');
+  const list = document.getElementById('file-queue-list');
+  if (!fileQueue.length) { container.classList.add('hidden'); return; }
+  container.classList.remove('hidden');
+  list.innerHTML = fileQueue.map(q => {
+    const statusIcon = { pending:'⏳', uploading:'🔄', done:'✅', error:'❌' }[q.status];
+    const statusColor = { pending:'text-slate-500', uploading:'text-blue-500', done:'text-green-600', error:'text-red-500' }[q.status];
+    const size = (q.file.size / 1024).toFixed(1);
+    return `<div class="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 text-xs">
+      <span class="text-base leading-none">${statusIcon}</span>
+      <span class="flex-1 truncate text-slate-700 font-medium">${q.file.name}</span>
+      <span class="text-slate-400">${size} KB</span>
+      ${q.status === 'pending' ? `<button onclick="removeFromQueue('${q.file.name}')" class="text-slate-400 hover:text-red-500 font-bold">×</button>` : ''}
+      ${q.msg ? `<span class="${statusColor}">${q.msg}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function checkUploadReady() {
+  const hasPending = inputMode === 'pdf'
+    ? fileQueue.some(q => q.status === 'pending')
+    : urlQueue.some(q => q.status === 'pending');
+  document.getElementById('upload-btn').disabled = !(selectedProvider && hasPending);
+}
+
+async function doUploadAll() {
+  if (!selectedProvider) { toast('Select a provider first.', 'error'); return; }
+
+  document.getElementById('upload-btn').disabled = true;
+  document.getElementById('upload-btn').textContent = 'Ingesting…';
+  document.getElementById('upload-success-banner').classList.add('hidden');
+
+  let doneCount = 0, totalChunks = 0, errors = 0;
+
+  if (inputMode === 'pdf') {
+    const pending = fileQueue.filter(q => q.status === 'pending');
+    if (!pending.length) return;
+    for (const item of pending) {
+      item.status = 'uploading'; renderQueue();
+      try {
+        const fd = new FormData();
+        fd.append('provider', selectedProvider);
+        fd.append('file', item.file);
+        const res = await fetch(`${API}/api/admin/upload`, { method: 'POST', body: fd });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
+        const data = await res.json();
+        item.status = 'done'; item.msg = `${data.chunks_created} chunks`;
+        totalChunks += data.chunks_created; doneCount++;
+      } catch(e) { item.status = 'error'; item.msg = e.message.slice(0, 40); errors++; }
+      renderQueue();
+    }
+  } else {
+    const pending = urlQueue.filter(q => q.status === 'pending');
+    if (!pending.length) return;
+    for (const item of pending) {
+      item.status = 'uploading'; renderUrlQueue();
+      try {
+        const data = await apiFetch('/api/admin/ingest-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: selectedProvider, url: item.url }),
+        });
+        item.status = 'done'; item.msg = `${data.chunks_created} chunks`;
+        totalChunks += data.chunks_created; doneCount++;
+      } catch(e) { item.status = 'error'; item.msg = e.message.slice(0, 40); errors++; }
+      renderUrlQueue();
+    }
+  }
+
+  if (doneCount > 0) {
+    const banner = document.getElementById('upload-success-banner');
+    document.getElementById('success-banner-title').textContent =
+      `${doneCount} source${doneCount > 1 ? 's' : ''} ingested successfully!`;
+    document.getElementById('success-banner-body').textContent =
+      `${totalChunks} chunks indexed into ChromaDB for "${selectedProvider}"` +
+      (errors ? ` · ${errors} failed` : '');
+    banner.classList.remove('hidden');
+    banner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  if (errors) toast(`${errors} item(s) failed to ingest.`, 'error');
+
+  loadProviders();
+  loadChatProviders();
+  document.getElementById('upload-btn').textContent = 'Ingest All';
+  checkUploadReady();
+}
+
+async function loadProviders() {
+  const el = document.getElementById('provider-list');
+  try {
+    const data = await apiFetch('/api/providers/ingested');
+    if (!data.length) {
+      el.innerHTML = '<p class="text-sm text-slate-400">No documents ingested yet. Upload an SLA PDF to get started.</p>';
+      return;
+    }
+    el.innerHTML = data.map(p => `
+      <div class="flex items-center justify-between py-2 border-b border-slate-100 last:border-0" id="prov-row-${p.id}">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 font-bold text-xs">${p.name.slice(0,2).toUpperCase()}</div>
+          <div>
+            <span class="text-sm font-medium text-slate-700">${p.name}</span>
+            <p class="text-xs text-slate-400">${p.doc_count} document${p.doc_count !== 1 ? 's' : ''}</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="badge badge-green">Ingested</span>
+          <button
+            onclick="deleteProvider('${p.id}', '${p.name}')"
+            class="text-slate-300 hover:text-red-500 transition-colors p-1 rounded"
+            title="Delete ${p.name} and all its documents">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+          </button>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm text-red-500">${e.message}</p>`;
+  }
+}
+
+async function deleteProvider(id, name) {
+  if (!confirm(`Delete "${name}" and all its ingested documents?\n\nThis will remove all chunks, metrics, and embeddings. This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`${API}/api/admin/provider/${id}`, { method: 'DELETE' });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
+    const data = await res.json();
+    // Animate row out
+    const row = document.getElementById(`prov-row-${id}`);
+    if (row) { row.style.opacity = '0'; row.style.transition = 'opacity 0.3s'; setTimeout(() => loadProviders(), 300); }
+    toast(`"${data.deleted}" deleted — ${data.documents_removed} document(s) removed`, 'success');
+    loadChatProviders();
+  } catch(e) {
+    toast(e.message, 'error');
+  }
+}
+
+// ── QUERY TAB ────────────────────────────────────────────────────────────────
+
+let currentQueryId = null; // stored after each successful query
+
+async function doQuery() {
+  const text = document.getElementById('query-text').value.trim();
+  if (!text) { toast('Please enter your requirements.', 'error'); return; }
+
+  const weights = {
+    uptime:   parseFloat(document.getElementById('w-uptime').value),
+    rto:      parseFloat(document.getElementById('w-rto').value),
+    support:  parseFloat(document.getElementById('w-support').value),
+    penalty:  parseFloat(document.getElementById('w-penalty').value),
+    regions:  parseFloat(document.getElementById('w-regions').value),
+  };
+
+  document.getElementById('query-btn').disabled = true;
+  document.getElementById('query-spinner').classList.remove('hidden');
+  document.getElementById('query-results').innerHTML = '';
+
+  try {
+    const data = await apiFetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, weights }),
+    });
+    currentQueryId = data.query_id;
+    renderResults(data);
+  } catch(e) {
+    toast(e.message, 'error');
+    document.getElementById('query-results').innerHTML =
+      `<div class="card p-6 text-red-500 text-sm">${e.message}</div>`;
+  } finally {
+    document.getElementById('query-btn').disabled = false;
+    document.getElementById('query-spinner').classList.add('hidden');
+  }
+}
+
+function renderResults(data) {
+  const container = document.getElementById('query-results');
+
+  // Parsed requirements pill bar
+  const req = data.parsed_requirements || {};
+  const pills = [
+    req.uptime_required_pct && `Uptime ≥ ${req.uptime_required_pct}%`,
+    req.rto_hours && `RTO ≤ ${req.rto_hours}h`,
+    req.region && `Region: ${req.region}`,
+    req.compliance?.length && `Compliance: ${req.compliance.join(', ')}`,
+    req.category && `Category: ${req.category}`,
+    req.budget_usd_monthly && `Budget: $${req.budget_usd_monthly}/mo`,
+  ].filter(Boolean);
+
+  let html = '';
+  if (pills.length) {
+    html += `<div class="card p-4 mb-2">
+      <p class="text-xs text-slate-500 font-medium mb-2">Detected requirements</p>
+      <div class="flex flex-wrap gap-2">${pills.map(p=>`<span class="badge badge-blue">${p}</span>`).join('')}</div>
+    </div>`;
+  }
+
+  if (!data.rankings?.length) {
+    html += `<div class="card p-6 text-slate-400 text-sm text-center">No providers with SLA data found. Ingest documents first.</div>`;
+    container.innerHTML = html;
+    return;
+  }
+
+  data.rankings.forEach(r => {
+    const score = r.final_score || 0;
+    const rankColors = ['bg-yellow-400','bg-slate-300','bg-amber-600'];
+    const rankColor = rankColors[r.rank_position-1] || 'bg-slate-200';
+    const complianceBadges = r.compliance_tags?.map(c => `<span class="badge badge-gray">${c}</span>`).join('') || '';
+
+    const checks = [
+      r.meets_uptime != null && `<span class="badge ${r.meets_uptime?'badge-green':'badge-red'}">${r.meets_uptime?'✓':'✗'} Uptime</span>`,
+      r.meets_rto != null    && `<span class="badge ${r.meets_rto?'badge-green':'badge-red'}">${r.meets_rto?'✓':'✗'} RTO</span>`,
+      r.meets_region != null && `<span class="badge ${r.meets_region?'badge-green':'badge-red'}">${r.meets_region?'✓':'✗'} Region</span>`,
+    ].filter(Boolean).join('');
+
+    html += `<div class="card p-5" id="result-card-${r.provider_id}">
+      <div class="flex items-start gap-4">
+        <div class="w-9 h-9 rounded-full ${rankColor} flex items-center justify-center font-bold text-white text-sm shrink-0">#${r.rank_position}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h3 class="font-semibold text-slate-800">${r.provider_name}</h3>
+            <span class="text-lg font-bold text-blue-600">${score.toFixed(1)}<span class="text-xs font-normal text-slate-400">/100</span></span>
+          </div>
+          <div class="score-bar my-2 w-full"><div class="score-fill" style="width:${score}%"></div></div>
+          <div class="flex flex-wrap gap-1.5 mb-2">${checks}${complianceBadges}</div>
+          ${r.explanation ? `<p class="text-xs text-slate-500 mt-2 leading-relaxed">${r.explanation}</p>` : ''}
+          <div class="grid grid-cols-3 gap-3 mt-3 text-xs text-slate-500">
+            <div><span class="font-medium text-slate-700">TOPSIS</span><br>${(r.topsis_score||0).toFixed(3)}</div>
+            <div><span class="font-medium text-slate-700">XGB</span><br>${(r.xgb_score||0).toFixed(3)}</div>
+            ${r.cost_usd ? `<div><span class="font-medium text-slate-700">Cost</span><br>$${r.cost_usd.toFixed(0)}/mo</div>` : '<div></div>'}
+          </div>
+          <!-- Feedback row -->
+          <div class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-3" id="fb-${r.provider_id}">
+            <span class="text-xs text-slate-400 fb-label">Was this recommendation helpful?</span>
+            <button
+              onclick="doFeedback('${r.provider_id}', 'thumbs_up', this)"
+              class="fb-btn fb-up flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-green-500 hover:text-green-600 hover:bg-green-50 transition-all text-xs font-semibold">
+              👍 Yes
+            </button>
+            <button
+              onclick="doFeedback('${r.provider_id}', 'thumbs_down', this)"
+              class="fb-btn fb-down flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:border-red-400 hover:text-red-500 hover:bg-red-50 transition-all text-xs font-semibold">
+              👎 No
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+// ── FEEDBACK ──────────────────────────────────────────────────────────────────
+
+async function doFeedback(providerId, signal, btn) {
+  if (!currentQueryId) { toast('Submit a query first.', 'error'); return; }
+
+  const group = document.getElementById(`fb-${providerId}`);
+  const allBtns = group.querySelectorAll('.fb-btn');
+  allBtns.forEach(b => b.disabled = true);
+
+  try {
+    await apiFetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query_id:    currentQueryId,
+        provider_id: providerId,
+        signal:      signal,
+      }),
+    });
+
+    const isUp = signal === 'thumbs_up';
+
+    // Style chosen button, fade out the other
+    allBtns.forEach(b => {
+      if (b === btn) {
+        b.className = `fb-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${
+          isUp ? 'border-green-500 bg-green-50 text-green-700' : 'border-red-400 bg-red-50 text-red-600'
+        }`;
+      } else {
+        b.className = 'fb-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-100 bg-white text-slate-300 text-xs font-semibold opacity-40';
+      }
+    });
+
+    // Update label
+    const label = group.querySelector('.fb-label');
+    if (label) {
+      label.textContent = isUp ? 'Thanks for the feedback!' : 'Thanks, we\'ll improve this.';
+      label.className = `fb-label text-xs font-medium ${isUp ? 'text-green-600' : 'text-slate-500'}`;
+    }
+
+  } catch(e) {
+    allBtns.forEach(b => b.disabled = false);
+    toast('Could not save feedback: ' + e.message, 'error');
+  }
+}
+
+// ── COMPARE TAB ──────────────────────────────────────────────────────────────
+
+let allProviders = [];
+
+async function loadCompareCheckboxes() {
+  const el = document.getElementById('compare-checkboxes');
+  try {
+    allProviders = await apiFetch('/api/providers');
+    if (!allProviders.length) { el.innerHTML = '<p class="text-sm text-slate-400">No providers available.</p>'; return; }
+    el.innerHTML = allProviders.map(p => `
+      <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+        <input type="checkbox" value="${p.name}" class="compare-cb rounded" checked />
+        ${p.name}
+      </label>`).join('');
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm text-red-500">${e.message}</p>`;
+  }
+}
+
+async function doCompare() {
+  const selected = [...document.querySelectorAll('.compare-cb:checked')].map(c => c.value);
+  if (!selected.length) { toast('Select at least one provider.', 'error'); return; }
+  const el = document.getElementById('compare-results');
+  el.innerHTML = '<div class="spinner mx-auto my-6"></div>';
+  try {
+    const data = await apiFetch(`/api/compare?providers=${encodeURIComponent(selected.join(','))}`);
+    renderComparison(data.comparison || []);
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm text-red-500">${e.message}</p>`;
+  }
+}
+
+function renderComparison(rows) {
+  const el = document.getElementById('compare-results');
+  if (!rows.length) { el.innerHTML = '<p class="text-sm text-slate-400">No SLA metrics found. Ingest documents first.</p>'; return; }
+
+  const fields = [
+    ['uptime_sla_pct',      'Uptime SLA',     v => v != null ? `${v}%` : '—'],
+    ['rto_hours',           'RTO',            v => v != null ? `${v}h` : '—'],
+    ['rpo_hours',           'RPO',            v => v != null ? `${v}h` : '—'],
+    ['support_response_min','Support',        v => v != null ? `${v} min` : '—'],
+    ['penalty_credit_pct',  'Penalty Credit', v => v != null ? `${v}%` : '—'],
+    ['regions',             'Regions',        v => v?.length ? v.join(', ') : '—'],
+    ['compliance',          'Compliance',     v => v?.length ? v.map(c=>`<span class="badge badge-gray">${c}</span>`).join(' ') : '—'],
+    ['source_clause',       'Source Clause',  v => v ? `<span class="text-xs text-slate-500">${v.slice(0,120)}…</span>` : '—'],
+  ];
+
+  let table = `<table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="bg-slate-50">
+        <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 border border-slate-200">Metric</th>
+        ${rows.map(r => `<th class="text-left py-2 px-3 text-xs font-semibold text-slate-700 border border-slate-200">${r.provider}</th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>
+      ${fields.map(([key, label, fmt]) => `
+        <tr class="hover:bg-slate-50">
+          <td class="py-2 px-3 font-medium text-slate-600 border border-slate-200 whitespace-nowrap">${label}</td>
+          ${rows.map(r => `<td class="py-2 px-3 border border-slate-200">${fmt(r.metrics?.[key])}</td>`).join('')}
+        </tr>`).join('')}
+    </tbody>
+  </table>`;
+
+  el.innerHTML = table;
+}
+
+// ── CHAT TAB ──────────────────────────────────────────────────────────────────
+
+async function loadChatProviders() {
+  const sel = document.getElementById('chat-provider-filter');
+  try {
+    const providers = await apiFetch('/api/providers');
+    sel.innerHTML = '<option value="">All providers</option>' +
+      providers.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+  } catch {}
+}
+
+function fillChat(text) {
+  document.getElementById('chat-input').value = text;
+  document.getElementById('chat-input').focus();
+}
+
+function appendMessage(role, html, sources) {
+  const el = document.getElementById('chat-messages');
+  const isUser = role === 'user';
+  const avatar = isUser
+    ? `<div class="w-7 h-7 bg-slate-200 rounded-full flex items-center justify-center text-slate-600 text-xs font-bold shrink-0 mt-0.5">You</div>`
+    : `<div class="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 text-xs font-bold shrink-0 mt-0.5">AI</div>`;
+
+  let sourcesHtml = '';
+  if (sources?.length) {
+    sourcesHtml = `<div class="mt-3 space-y-1.5">
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Sources</p>
+      ${sources.map(s => `
+        <div class="source-card px-3 py-2">
+          <div class="flex justify-between mb-1">
+            <span class="badge badge-blue">${s.provider}</span>
+            <span class="text-xs text-slate-400">page ${s.page} · score ${s.score}</span>
+          </div>
+          <p class="text-xs text-slate-500 leading-relaxed">${s.text.slice(0,160)}…</p>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  const div = document.createElement('div');
+  div.className = `flex gap-3 ${isUser ? 'justify-end' : ''}`;
+  div.innerHTML = isUser
+    ? `<div class="msg-user px-4 py-3 text-sm max-w-lg">${html}</div>${avatar}`
+    : `${avatar}<div class="flex-1 max-w-xl"><div class="msg-bot px-4 py-3 text-sm">${html}</div>${sourcesHtml}</div>`;
+
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  return div;
+}
+
+async function doAsk() {
+  const input = document.getElementById('chat-input');
+  const question = input.value.trim();
+  if (!question) return;
+  const provider = document.getElementById('chat-provider-filter').value || null;
+
+  input.value = '';
+  input.disabled = true;
+  document.getElementById('ask-btn').disabled = true;
+
+  appendMessage('user', question);
+
+  // Typing indicator
+  const typing = appendMessage('bot', '<div class="flex gap-1 items-center h-5"><div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay:0s"></div><div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay:.15s"></div><div class="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style="animation-delay:.3s"></div></div>');
+
+  try {
+    const data = await apiFetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, provider }),
+    });
+    typing.remove();
+    appendMessage('bot', data.answer.replace(/\n/g,'<br>'), data.sources);
+  } catch(e) {
+    typing.remove();
+    appendMessage('bot', `<span class="text-red-500">${e.message}</span>`);
+  } finally {
+    input.disabled = false;
+    document.getElementById('ask-btn').disabled = false;
+    input.focus();
+  }
+}
+
+// ── PRICING TAB ──────────────────────────────────────────────────────────────
+
+async function loadPricing() {
+  const el = document.getElementById('pricing-results');
+  el.innerHTML = '<div class="spinner mx-auto my-6"></div>';
+  try {
+    const providers = await apiFetch('/api/providers/ingested');
+    if (!providers.length) {
+      el.innerHTML = '<p class="text-sm text-slate-400">No ingested providers. Upload SLA documents first.</p>';
+      return;
+    }
+    const rows = await Promise.all(providers.map(p =>
+      apiFetch(`/api/providers/${p.id}/cost`)
+        .then(d => ({ name: p.name, items: d.pricing || [] }))
+        .catch(() => ({ name: p.name, items: [] }))
+    ));
+    const hasData = rows.some(r => r.items.length);
+    if (!hasData) {
+      el.innerHTML = `<div class="text-center py-8">
+        <p class="text-sm text-slate-500 font-medium mb-1">No pricing data cached yet.</p>
+        <p class="text-xs text-slate-400">Pricing is populated automatically when providers are ingested via the SLA refresh job, or you can seed it manually via the API.</p>
+      </div>`;
+      return;
+    }
+    el.innerHTML = `<div class="space-y-5">${rows.filter(r => r.items.length).map(r => `
+      <div>
+        <h3 class="font-semibold text-slate-700 mb-2 text-sm">${r.name}</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          ${r.items.map(c => `
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <div class="text-xs text-slate-500 font-medium mb-1 truncate">${c.service || 'Standard'}</div>
+              <div class="text-lg font-bold text-slate-800">$${(c.price_usd ?? 0).toFixed(4)}<span class="text-xs font-normal text-slate-400"> / ${c.unit || 'unit'}</span></div>
+              ${c.region ? `<div class="text-xs text-slate-400 mt-1">${c.region}</div>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>`).join('')}</div>`;
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm text-red-500">${e.message}</p>`;
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+checkHealth();
+loadProviders();
+loadChatProviders();
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>

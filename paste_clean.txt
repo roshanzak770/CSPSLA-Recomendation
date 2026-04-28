@@ -1,0 +1,154 @@
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║                          CloudSLA RECOMMENDER — SYSTEM ARCHITECTURE                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+ ┌─────────────────────────────────────────────────────────────────────────────────┐
+ │                              PRESENTATION LAYER                                 │
+ │                          Nginx : Alpine  (Port 3000)                            │
+ │                                                                                 │
+ │   ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────────┐  ┌─────────┐  │
+ │   │ Upload SLA│  │ Recommend │  │  Compare  │  │ Chat with SLA│  │ Pricing │  │
+ │   │           │  │           │  │           │  │              │  │         │  │
+ │   │ PDF Upload│  │ NL Query  │  │ Side-by   │  │ RAG Q&A      │  │ Live    │  │
+ │   │ URL Paste │  │ Weight    │  │ Side Table│  │ Page Citations│  │ Pricing │  │
+ │   │ Doc Delete│  │ Sliders   │  │           │  │ Provider Filter│ │ Cards   │  │
+ │   └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └──────┬───────┘  └────┬────┘  │
+ └─────────┼──────────────┼──────────────┼────────────────┼───────────────┼───────┘
+           │              │  REST API / JSON (HTTP)        │               │
+ ══════════╪══════════════╪══════════════╪════════════════╪═══════════════╪═════════
+           │              │              │                 │               │
+ ┌─────────┼──────────────┼──────────────┼─────────────────┼───────────────┼───────┐
+ │         ▼              ▼              ▼                 ▼               ▼       │
+ │  ┌─────────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────┐ ┌────────────┐  │
+ │  │POST /admin/ │ │POST      │ │GET       │ │POST /api/ask   │ │GET         │  │
+ │  │upload       │ │/api/query│ │/api/     │ │                │ │/api/       │  │
+ │  │ingest-url   │ │          │ │compare   │ │RAG Pipeline    │ │providers/  │  │
+ │  │DELETE       │ │6-Stage   │ │          │ │                │ │{id}/cost   │  │
+ │  │/provider/id │ │Pipeline  │ │          │ │                │ │            │  │
+ │  └──────┬──────┘ └────┬─────┘ └────┬─────┘ └───────┬────────┘ └─────┬──────┘  │
+ │         │             │            │               │                 │         │
+ │  ╔══════╪═════════════╪════════════╪═══════════════╪═════════════════╪═══════╗ │
+ │  ║               F A S T A P I   B A C K E N D  (Port 8000)                 ║ │
+ │  ╚══════╪═════════════╪════════════╪═══════════════╪═════════════════╪═══════╝ │
+ │         │             │            │               │                 │         │
+ │         ▼             │            │               ▼                 │         │
+ │  ┌─────────────┐      │            │    ┌──────────────────┐         │         │
+ │  │  INGESTION  │      │            │    │   RAG SERVICE    │         │         │
+ │  │  SERVICE    │      │            │    │                  │         │         │
+ │  │             │      │            │    │ search_sla()     │         │         │
+ │  │ extract_text│      │            │    │ ChromaDB top-5   │         │         │
+ │  │ chunk_pages │      │            │    │ Build context    │         │         │
+ │  │ embed_store │      │            │    │ Zephyr-7B answer │         │         │
+ │  └──────┬──────┘      │            │    └────────┬─────────┘         │         │
+ │         │             ▼            │             │                   │         │
+ │         │    ┌─────────────────────────────┐     │                   │         │
+ │         │    │    6-STAGE RANKING PIPELINE │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ① NLP Understanding        │     │                   │         │
+ │         │    │    Zephyr-7B → requirements │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ② Semantic Retrieval       │     │                   │         │
+ │         │    │    e5 embed → ChromaDB      │     │                   │         │
+ │         │    │    → cosine scores          │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ③ Metric Loading           │     │                   │         │
+ │         │    │    PostgreSQL SLAMetrics     │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ④ TOPSIS Ranking           │     │                   │         │
+ │         │    │    Normalize → Weight →     │     │                   │         │
+ │         │    │    Ideal Best/Worst →       │     │                   │         │
+ │         │    │    Relative Closeness Score │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ⑤ XGBoost LambdaMART      │     │                   │         │
+ │         │    │    8 features → re-rank     │     │                   │         │
+ │         │    │    (fallback → TOPSIS)      │     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  ⑥ LLM Explanation         │     │                   │         │
+ │         │    │    Zephyr-7B → plain English│     │                   │         │
+ │         │    │                             │     │                   │         │
+ │         │    │  Score Fusion:              │     │                   │         │
+ │         │    │  TOPSIS×0.5 + e5×0.2        │     │                   │         │
+ │         │    │  + XGB×0.3  → 0-100         │     │                   │         │
+ │         │    └─────────────────────────────┘     │                   │         │
+ │  APPLICATION LAYER                               │                   │         │
+ └─────────┼───────────────────────────────────────┼───────────────────┼─────────┘
+           │                                        │                   │
+ ══════════╪════════════════════════════════════════╪═══════════════════╪═════════
+           │                                        │                   │
+ ┌─────────┼────────────────────────────────────────┼───────────────────┼─────────┐
+ │         │          D A T A   L A Y E R           │                   │         │
+ │         │                                        │                   │         │
+ │  ┌──────▼──────────────────────────┐    ┌────────▼──────┐    ┌───────▼──────┐ │
+ │  │         PostgreSQL 15           │    │   ChromaDB    │    │    Redis     │ │
+ │  │         (Port 5432)             │    │  (Port 8001)  │    │  (Port 6379) │ │
+ │  │                                 │    │               │    │              │ │
+ │  │  providers      sla_documents   │    │ Collection:   │    │  Celery      │ │
+ │  │  sla_chunks     sla_metrics     │    │ sla_documents │    │  Message     │ │
+ │  │  queries        rankings        │    │               │    │  Broker      │ │
+ │  │  feedback       pricing_cache   │    │ 768-dim e5    │    │              │ │
+ │  │  sla_alerts     users           │    │ vectors       │    │  Task Queue  │ │
+ │  │                                 │    │               │    │              │ │
+ │  └─────────────────────────────────┘    │ HNSW cosine   │    └──────┬───────┘ │
+ │                                         │ similarity    │           │         │
+ │                                         └───────────────┘           │         │
+ └────────────────────────────────────────────────────────────────────┼─────────┘
+                                                                       │
+ ══════════════════════════════════════════════════════════════════════╪═════════
+                                                                       │
+ ┌─────────────────────────────────────────────────────────────────────▼────────┐
+ │                     ASYNC TASK LAYER  (Celery + Redis)                        │
+ │                                                                               │
+ │  ┌───────────────────────┐  ┌──────────────────────┐  ┌──────────────────┐   │
+ │  │  CELERY BEAT          │  │  CELERY WORKER       │  │  CELERY WORKER   │   │
+ │  │  (Scheduler)          │  │  Weekly SLA Refresh  │  │  XGBoost Retrain │   │
+ │  │                       │  │                      │  │                  │   │
+ │  │  Weekly  → SLA Refresh│  │  Re-extract PDF text │  │  Feedback JOIN   │   │
+ │  │  Daily   → Pricing    │  │  cosine diff < 0.95? │  │  Ranking tables  │   │
+ │  │  On-demand→ XGB Train │  │  Zephyr classify     │  │  Build 8-feature │   │
+ │  └───────────────────────┘  │  INSERT SLAAlert     │  │  matrix          │   │
+ │                              └──────────────────────┘  │  xgb.train()    │   │
+ │                                                         └──────────────────┘   │
+ └───────────────────────────────────────────────────────────────────────────────┘
+
+ ══════════════════════════════════════════════════════════════════════════════════
+                           EXTERNAL SERVICES
+ ══════════════════════════════════════════════════════════════════════════════════
+
+ ┌──────────────────────────┐   ┌──────────────────────────────────────────────┐
+ │    HuggingFace            │   │         CLOUD PRICING APIs (free/public)    │
+ │    Inference API          │   │                                              │
+ │                          │   │  Azure  → prices.azure.com/api/retail/prices │
+ │  Model: Zephyr-7B-beta   │   │  AWS    → pricing.us-east-1.amazonaws.com    │
+ │                          │   │  GCP    → cloudpricingcalculator.appspot.com │
+ │  • extract_sla_metrics   │   │  IBM    → globalcatalog.cloud.ibm.com        │
+ │  • understand_query      │   │  Oracle → static curated data               │
+ │  • generate_explanation  │   │                                              │
+ │  • describe_sla_change   │   └──────────────────────────────────────────────┘
+ └──────────────────────────┘
+ ┌──────────────────────────┐
+ │  LibreTranslate           │
+ │  Self-hosted (Port 5001)  │
+ │  Non-English query support│
+ └──────────────────────────┘
+
+ ══════════════════════════════════════════════════════════════════════════════════
+                              DATA FLOW SUMMARY
+ ══════════════════════════════════════════════════════════════════════════════════
+
+  PDF / URL  ──► Ingestion ──► Chunk ──► Embed (e5) ──► ChromaDB
+                     │                                       │
+                     └──► LLM Extract Metrics ──► PostgreSQL │
+                                                             │
+  NL Query ──► Stage①NLP ──► Stage②Retrieve ──────────────► │
+                                  │                          │
+                                  └──► Stage③ Load Metrics ──┘
+                                             │
+                                       Stage④ TOPSIS
+                                             │
+                                       Stage⑤ XGBoost
+                                             │
+                                       Stage⑥ Explain (LLM)
+                                             │
+                                    Ranked Results ──► Browser
+
+  User Feedback ──► PostgreSQL ──► Celery ──► XGBoost Retrain ──► Better Rankings

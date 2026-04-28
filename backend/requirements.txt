@@ -1,0 +1,43 @@
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.0
+pydantic-settings==2.2.1
+
+# Database
+sqlalchemy==2.0.30
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# Task queue
+celery==5.3.6
+redis==5.0.4
+
+# PDF parsing
+pymupdf==1.24.0
+pdfplumber==0.11.0
+
+# NLP / RAG
+langchain==0.2.0
+langchain-community==0.2.0
+chromadb==1.0.0
+sentence-transformers==3.0.0
+tokenizers>=0.19,<0.20
+transformers>=4.40.0
+tenacity>=8.1.0,<9.0.0
+
+# LLM
+huggingface-hub==0.23.0
+
+# ML
+numpy==1.26.4
+xgboost==2.0.3
+shap==0.45.0
+
+# Translation / language detection
+langdetect==1.0.9
+requests==2.31.0
+
+# Testing
+pytest==8.2.0
+pytest-asyncio==0.23.0
+httpx==0.27.0
