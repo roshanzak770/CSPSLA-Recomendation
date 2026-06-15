@@ -1,20 +1,135 @@
 """
-GET  /api/pricing/compare    — side-by-side pricing across providers
-GET  /api/pricing/services   — list services with pricing
-POST /api/pricing/refresh    — trigger manual pricing refresh
-GET  /api/pricing/apis       — show which free APIs are available
+GET  /api/pricing/live      — fetch all cached pricing (auto-populates on first call)
+GET  /api/pricing/compare   — side-by-side pricing across providers
+GET  /api/pricing/services  — list services with pricing (aggregate stats)
+POST /api/pricing/refresh   — synchronously refresh pricing from all free APIs
+GET  /api/pricing/apis      — show which free APIs are available
 """
 
+import asyncio
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete as sa_delete
 
 from app.db.session import get_db
 from app.models.models import Provider, PricingCache
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
+
+
+# ── Shared helper ─────────────────────────────────────────────────────────────
+
+async def _rows_to_items(db: AsyncSession, limit: int = 5000) -> list[dict]:
+    """Return flat list of PricingCache rows joined with Provider name (price_usd > 0)."""
+    result = await db.execute(
+        select(Provider.name.label("provider"), PricingCache)
+        .join(Provider, Provider.id == PricingCache.provider_id)
+        .where(PricingCache.price_usd > 0)
+        .order_by(Provider.name, PricingCache.service)
+        .limit(limit)
+    )
+    rows = result.all()
+    return [
+        {
+            "provider": row.provider,
+            "service": row.PricingCache.service,
+            "sku": row.PricingCache.sku,
+            "region": row.PricingCache.region,
+            "price_usd": row.PricingCache.price_usd,
+            "unit": row.PricingCache.unit,
+            "fetched_at": (
+                row.PricingCache.fetched_at.isoformat()
+                if row.PricingCache.fetched_at
+                else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+async def _insert_provider_items(
+    db: AsyncSession, all_data: dict[str, list[dict]]
+) -> None:
+    """Upsert providers and insert pricing items from fetch_all_providers() result."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for prov_name, items in all_data.items():
+        # Get or create the Provider row
+        prov_result = await db.execute(
+            select(Provider).where(Provider.name.ilike(prov_name))
+        )
+        provider = prov_result.scalar_one_or_none()
+        if not provider:
+            provider = Provider(
+                id=uuid.uuid4(),
+                name=prov_name,
+            )
+            db.add(provider)
+            await db.flush()
+
+        # Insert pricing rows (skip zero-price index entries)
+        for item in items:
+            price = item.get("price_usd", 0.0)
+            if not price or price <= 0.0:
+                continue
+            db.add(
+                PricingCache(
+                    id=uuid.uuid4(),
+                    provider_id=provider.id,
+                    service=item.get("service", ""),
+                    sku=item.get("sku"),
+                    region=item.get("region", "global"),
+                    price_usd=float(price),
+                    unit=item.get("unit"),
+                    fetched_at=now,
+                )
+            )
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/live")
+async def get_live_pricing(db: AsyncSession = Depends(get_db)):
+    """
+    Return all cached pricing data as a flat list.
+    If the cache is empty, synchronously fetches from all free public APIs first
+    (self-healing on first visit — no manual refresh required).
+    """
+    count_result = await db.execute(select(func.count(PricingCache.id)))
+    count = count_result.scalar() or 0
+
+    if count == 0:
+        from app.services.pricing import fetch_all_providers
+        all_data: dict = await asyncio.to_thread(fetch_all_providers)
+        await _insert_provider_items(db, all_data)
+        await db.commit()
+
+    items = await _rows_to_items(db)
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/refresh")
+async def trigger_pricing_refresh(db: AsyncSession = Depends(get_db)):
+    """
+    Synchronously re-fetch pricing from all free cloud APIs, replace cached data,
+    and return the fresh results immediately.
+    """
+    from app.services.pricing import fetch_all_providers
+
+    all_data: dict = await asyncio.to_thread(fetch_all_providers)
+
+    # Wipe old cache
+    await db.execute(sa_delete(PricingCache))
+    await db.flush()
+
+    await _insert_provider_items(db, all_data)
+    await db.commit()
+
+    items = await _rows_to_items(db)
+    return {"status": "ok", "items": items, "total": len(items)}
 
 
 @router.get("/compare")
@@ -103,18 +218,6 @@ async def list_priced_services(db: AsyncSession = Depends(get_db)):
             "max_price_usd": row[4],
         })
     return {"services_by_provider": services}
-
-
-@router.post("/refresh")
-async def trigger_pricing_refresh():
-    """Trigger pricing refresh from all free cloud provider APIs (Celery task)."""
-    from app.tasks.sla_tasks import refresh_pricing
-    task = refresh_pricing.delay()
-    return {
-        "status": "queued",
-        "task_id": task.id,
-        "message": "Pricing refresh queued for Azure, AWS, GCP, IBM, Oracle.",
-    }
 
 
 @router.get("/apis")

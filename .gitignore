@@ -22,6 +22,14 @@ backend/models/*.json
 # ChromaDB data
 chromadb/
 
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SQLite (test databases)
+*.db
+*.sqlite3
+
 # Logs
 *.log
 

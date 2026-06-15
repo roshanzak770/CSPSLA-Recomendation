@@ -189,3 +189,20 @@ class PricingCache(Base):
     fetched_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     provider = relationship("Provider", back_populates="pricing")
+
+
+class AlertThreshold(Base):
+    """User-defined threshold rules — e.g. notify if Azure uptime drops below 99.95%."""
+    __tablename__ = "alert_thresholds"
+
+    id            = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email         = Column(String(255), nullable=False)          # who to notify
+    provider_id   = Column(UUID(as_uuid=True), ForeignKey("providers.id"), nullable=True)  # null = all providers
+    metric        = Column(String(50), nullable=False)           # uptime_sla_pct | rto_hours | rpo_hours | penalty_credit_pct
+    operator      = Column(String(10), nullable=False)           # below | above
+    threshold_value = Column(Float, nullable=False)
+    active        = Column(Boolean, default=True)
+    created_at    = Column(TIMESTAMP, default=datetime.utcnow)
+    last_triggered_at = Column(TIMESTAMP, nullable=True)
+
+    provider = relationship("Provider")

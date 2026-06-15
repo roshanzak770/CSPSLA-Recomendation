@@ -67,95 +67,150 @@
 <!-- Nav tabs -->
 <div class="max-w-6xl mx-auto px-6 pt-6">
   <div class="flex gap-2 mb-6 flex-wrap">
-    <button class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium" data-tab="upload">Upload SLA</button>
+    <button class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium" data-tab="upload">Add SLA Docs</button>
     <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="query">Recommend</button>
     <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="compare">Compare</button>
     <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="chat">Chat with SLA</button>
     <button class="tab-btn px-4 py-2 rounded-lg text-sm font-medium" data-tab="pricing">💰 Pricing</button>
   </div>
 
-  <!-- ═══════════════ UPLOAD TAB ═══════════════ -->
+  <!-- ═══════════════ ADD SLA DOCS TAB ═══════════════ -->
   <div id="tab-upload" class="tab-pane">
-    <div id="upload-success-banner" class="hidden mb-4 rounded-xl bg-green-50 border border-green-200 px-5 py-4 flex items-start gap-3">
-      <span class="text-green-500 text-xl mt-0.5">✓</span>
-      <div class="flex-1">
-        <p class="font-semibold text-green-800 text-sm" id="success-banner-title">Upload successful!</p>
-        <p class="text-green-700 text-xs mt-0.5" id="success-banner-body"></p>
-      </div>
-      <button onclick="document.getElementById('upload-success-banner').classList.add('hidden')" class="text-green-400 hover:text-green-600 text-lg leading-none">×</button>
+
+    <!-- Section toggle -->
+    <div class="flex gap-2 mb-5">
+      <button id="section-upload-btn" onclick="setUploadSection('upload')"
+        class="px-4 py-2 rounded-lg text-sm font-semibold border-2 border-blue-500 bg-blue-50 text-blue-700 transition-all">
+        📤 Upload / Paste
+      </button>
+      <button id="section-search-btn" onclick="setUploadSection('search')"
+        class="px-4 py-2 rounded-lg text-sm font-semibold border-2 border-slate-200 text-slate-600 hover:border-blue-400 transition-all">
+        🔍 Search Web
+      </button>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="card p-6">
-        <h2 class="font-semibold text-slate-800 mb-5 text-base">Upload SLA Documents</h2>
-        <label class="block text-xs font-medium text-slate-600 mb-2">Step 1 — Select Provider Category</label>
-        <div class="grid grid-cols-3 gap-2 mb-3" id="provider-cards">
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="AWS" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">☁</div><div class="text-xs font-semibold text-slate-700">AWS</div>
-          </div>
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Azure" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">🔷</div><div class="text-xs font-semibold text-slate-700">Azure</div>
-          </div>
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="GCP" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">🌐</div><div class="text-xs font-semibold text-slate-700">GCP</div>
-          </div>
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Oracle" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">🔴</div><div class="text-xs font-semibold text-slate-700">Oracle</div>
-          </div>
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="IBM" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">💙</div><div class="text-xs font-semibold text-slate-700">IBM</div>
-          </div>
-          <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="__custom__" onclick="selectProviderCard(this)">
-            <div class="text-lg mb-0.5">✏️</div><div class="text-xs font-semibold text-slate-700">Custom</div>
-          </div>
-        </div>
-        <input type="text" id="upload-provider-custom" placeholder="Enter provider name…" class="mb-4 hidden" oninput="checkUploadReady()" />
 
-        <label class="block text-xs font-medium text-slate-600 mb-2">Step 2 — Choose Input Method</label>
-        <div class="flex gap-2 mb-3">
-          <button id="mode-pdf-btn" onclick="setInputMode('pdf')"
-            class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-blue-500 bg-blue-50 text-blue-700 transition-all">
-            📄 Upload PDF
-          </button>
-          <button id="mode-url-btn" onclick="setInputMode('url')"
-            class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-slate-200 text-slate-600 hover:border-blue-400 transition-all">
-            🔗 Paste URL
-          </button>
+    <!-- Upload / Paste section -->
+    <div id="upload-section">
+      <div id="upload-success-banner" class="hidden mb-4 rounded-xl bg-green-50 border border-green-200 px-5 py-4 flex items-start gap-3">
+        <span class="text-green-500 text-xl mt-0.5">✓</span>
+        <div class="flex-1">
+          <p class="font-semibold text-green-800 text-sm" id="success-banner-title">Upload successful!</p>
+          <p class="text-green-700 text-xs mt-0.5" id="success-banner-body"></p>
         </div>
-
-        <!-- PDF mode -->
-        <div id="input-pdf-mode">
-          <div id="drop-zone" class="drop-zone p-6 text-center mb-3 cursor-pointer" onclick="document.getElementById('file-input').click()">
-            <div class="text-3xl mb-1">📂</div>
-            <p class="text-sm text-slate-600 font-medium">Drag & drop PDFs here, or click to browse</p>
-            <p class="text-xs text-slate-400 mt-1">Multiple PDF files supported</p>
-          </div>
-          <input type="file" id="file-input" accept=".pdf" multiple class="hidden" />
-          <div id="file-queue" class="space-y-2 mb-4 hidden">
-            <p class="text-xs font-medium text-slate-500">Files to upload:</p>
-            <div id="file-queue-list" class="space-y-1.5 max-h-40 overflow-y-auto"></div>
-          </div>
-        </div>
-
-        <!-- URL mode -->
-        <div id="input-url-mode" class="hidden mb-4">
-          <p class="text-xs text-slate-500 mb-2">Paste a direct link to a PDF or an SLA webpage. The page will be fetched and analysed automatically.</p>
-          <div id="url-queue" class="space-y-2 mb-3"></div>
-          <div class="flex gap-2">
-            <input type="text" id="url-input" placeholder="https://example.com/sla.pdf or SLA page URL…" class="flex-1" onkeydown="if(event.key==='Enter')addUrlToQueue()" />
-            <button class="secondary px-3 text-xs" onclick="addUrlToQueue()">Add</button>
-          </div>
-        </div>
-
-        <button class="primary w-full" id="upload-btn" disabled onclick="doUploadAll()">Ingest All</button>
+        <button onclick="document.getElementById('upload-success-banner').classList.add('hidden')" class="text-green-400 hover:text-green-600 text-lg leading-none">×</button>
       </div>
-      <div class="card p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="font-semibold text-slate-800 text-base">Ingested Documents</h2>
-          <button class="secondary text-xs py-1.5 px-3" onclick="loadProviders()">Refresh</button>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="card p-6">
+          <h2 class="font-semibold text-slate-800 mb-5 text-base">Upload SLA Documents</h2>
+          <label class="block text-xs font-medium text-slate-600 mb-2">Step 1 — Select Provider Category</label>
+          <div class="grid grid-cols-3 gap-2 mb-3" id="provider-cards">
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="AWS" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">☁</div><div class="text-xs font-semibold text-slate-700">AWS</div>
+            </div>
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Azure" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">🔷</div><div class="text-xs font-semibold text-slate-700">Azure</div>
+            </div>
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="GCP" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">🌐</div><div class="text-xs font-semibold text-slate-700">GCP</div>
+            </div>
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="Oracle" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">🔴</div><div class="text-xs font-semibold text-slate-700">Oracle</div>
+            </div>
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="IBM" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">💙</div><div class="text-xs font-semibold text-slate-700">IBM</div>
+            </div>
+            <div class="provider-card cursor-pointer rounded-lg border-2 border-slate-200 p-2.5 text-center hover:border-blue-400 transition-all" data-val="__custom__" onclick="selectProviderCard(this)">
+              <div class="text-lg mb-0.5">✏️</div><div class="text-xs font-semibold text-slate-700">Custom</div>
+            </div>
+          </div>
+          <input type="text" id="upload-provider-custom" placeholder="Enter provider name…" class="mb-4 hidden" oninput="checkUploadReady()" />
+
+          <label class="block text-xs font-medium text-slate-600 mb-2">Step 2 — Choose Input Method</label>
+          <div class="flex gap-2 mb-3">
+            <button id="mode-pdf-btn" onclick="setInputMode('pdf')"
+              class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-blue-500 bg-blue-50 text-blue-700 transition-all">
+              📄 Upload PDF
+            </button>
+            <button id="mode-url-btn" onclick="setInputMode('url')"
+              class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-slate-200 text-slate-600 hover:border-blue-400 transition-all">
+              🔗 Paste URL
+            </button>
+            <button id="mode-text-btn" onclick="setInputMode('text')"
+              class="flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 border-slate-200 text-slate-600 hover:border-blue-400 transition-all">
+              ✏️ Paste Text
+            </button>
+          </div>
+
+          <!-- PDF mode -->
+          <div id="input-pdf-mode">
+            <div id="drop-zone" class="drop-zone p-6 text-center mb-3 cursor-pointer" onclick="document.getElementById('file-input').click()">
+              <div class="text-3xl mb-1">📂</div>
+              <p class="text-sm text-slate-600 font-medium">Drag & drop PDFs here, or click to browse</p>
+              <p class="text-xs text-slate-400 mt-1">Multiple PDF files supported</p>
+            </div>
+            <input type="file" id="file-input" accept=".pdf" multiple class="hidden" />
+            <div id="file-queue" class="space-y-2 mb-4 hidden">
+              <p class="text-xs font-medium text-slate-500">Files to upload:</p>
+              <div id="file-queue-list" class="space-y-1.5 max-h-40 overflow-y-auto"></div>
+            </div>
+          </div>
+
+          <!-- URL mode -->
+          <div id="input-url-mode" class="hidden mb-4">
+            <p class="text-xs text-slate-500 mb-2">Paste a direct link to a PDF or an SLA webpage. The page will be fetched and analysed automatically.</p>
+            <div id="url-queue" class="space-y-2 mb-3"></div>
+            <div class="flex gap-2">
+              <input type="text" id="url-input" placeholder="https://example.com/sla.pdf or SLA page URL…" class="flex-1" onkeydown="if(event.key==='Enter')addUrlToQueue()" />
+              <button class="secondary px-3 text-xs" onclick="addUrlToQueue()">Add</button>
+            </div>
+          </div>
+
+          <!-- Text mode -->
+          <div id="input-text-mode" class="hidden mb-4">
+            <p class="text-xs text-slate-500 mb-2">Paste raw SLA text directly. Minimum 200 characters required.</p>
+            <input type="text" id="text-title" placeholder="Document title (optional)…" class="mb-2" />
+            <textarea id="text-input" rows="8" placeholder="Paste SLA terms, clauses, or full agreement text here…" class="resize-y" oninput="onTextInput()"></textarea>
+            <p id="text-char-count" class="text-xs text-slate-400 mt-1 text-right">0 chars</p>
+          </div>
+
+          <button class="primary w-full" id="upload-btn" disabled onclick="doUploadAll()">Ingest All</button>
         </div>
-        <div id="provider-list" class="space-y-2"><p class="text-sm text-slate-400">Loading…</p></div>
+        <div class="card p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-semibold text-slate-800 text-base">Ingested Documents</h2>
+            <button class="secondary text-xs py-1.5 px-3" onclick="loadProviders()">Refresh</button>
+          </div>
+          <div id="provider-list" class="space-y-2"><p class="text-sm text-slate-400">Loading…</p></div>
+        </div>
       </div>
     </div>
+
+    <!-- Search Web section -->
+    <div id="search-section" class="hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="card p-6">
+          <h2 class="font-semibold text-slate-800 mb-2 text-base">Search Official SLA Sources</h2>
+          <p class="text-xs text-slate-500 mb-4">Automatically search official cloud provider websites for their latest SLA documents. Enter a provider name and click Search.</p>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Cloud Provider</label>
+          <input type="text" id="search-provider" placeholder="e.g. AWS, Azure, GCP, Oracle, IBM…" class="mb-4"
+            onkeydown="if(event.key==='Enter') doProviderSearch()" />
+          <button class="primary w-full" id="search-web-btn" onclick="doProviderSearch()">Search Official Sites</button>
+          <p id="search-info-msg" class="hidden text-xs text-amber-600 mt-2"></p>
+          <div id="search-spinner" class="hidden flex justify-center mt-4"><div class="spinner"></div></div>
+        </div>
+        <div class="card p-6">
+          <h2 class="font-semibold text-slate-800 mb-4 text-base">Search Results</h2>
+          <div id="search-results">
+            <p class="text-sm text-slate-400">Results will appear here after searching.</p>
+          </div>
+          <div id="search-ingest-bar" class="hidden mt-4 pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+            <span class="text-xs text-slate-500" id="search-selected-count">0 selected</span>
+            <button class="primary text-sm py-2 px-4" id="search-ingest-btn" onclick="doIngestSelected()" disabled>Ingest Selected</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- ═══════════════ QUERY TAB ═══════════════ -->
@@ -204,6 +259,30 @@
 
       <!-- Results -->
       <div class="lg:col-span-2">
+        <!-- Auto-fetch banner (shown when no docs ingested) -->
+        <div id="auto-fetch-banner" class="hidden mb-4 rounded-xl bg-blue-50 border border-blue-200 px-5 py-4 flex items-start gap-3">
+          <span class="text-blue-500 text-xl mt-0.5">⚡</span>
+          <div class="flex-1">
+            <p class="font-semibold text-blue-800 text-sm" id="auto-fetch-title">No SLA documents found</p>
+            <p class="text-blue-700 text-xs mt-0.5" id="auto-fetch-body"></p>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button class="primary text-xs py-1.5 px-3" id="auto-fetch-btn" onclick="doAutoFetch()">Auto-fetch SLA Docs</button>
+            <button onclick="document.getElementById('auto-fetch-banner').classList.add('hidden')" class="text-blue-400 hover:text-blue-600 text-lg leading-none">×</button>
+          </div>
+        </div>
+        <!-- Low-confidence banner (shown when results are poor matches) -->
+        <div id="low-conf-banner" class="hidden mb-4 rounded-xl bg-yellow-50 border border-yellow-200 px-5 py-4 flex items-start gap-3">
+          <span class="text-yellow-500 text-xl mt-0.5">⚠️</span>
+          <div class="flex-1">
+            <p class="font-semibold text-yellow-800 text-sm">Low confidence match</p>
+            <p class="text-yellow-700 text-xs mt-0.5" id="low-conf-suggestion"></p>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button class="primary text-xs py-1.5 px-3" id="low-conf-btn" onclick="doAutoFetch()">Fetch Updated SLAs</button>
+            <button onclick="document.getElementById('low-conf-banner').classList.add('hidden')" class="text-yellow-400 hover:text-yellow-600 text-lg leading-none">×</button>
+          </div>
+        </div>
         <div id="query-results" class="space-y-4">
           <div class="card p-8 text-center text-slate-400 text-sm">
             Results will appear here after you submit a query.
@@ -346,6 +425,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.add('hidden'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+    if (btn.dataset.tab === 'upload') setUploadSection('upload');
     if (btn.dataset.tab === 'compare') loadCompareCheckboxes();
     if (btn.dataset.tab === 'pricing') loadPricing();
   });
@@ -364,10 +444,13 @@ function setInputMode(mode) {
   inputMode = mode;
   document.getElementById('input-pdf-mode').classList.toggle('hidden', mode !== 'pdf');
   document.getElementById('input-url-mode').classList.toggle('hidden', mode !== 'url');
+  document.getElementById('input-text-mode').classList.toggle('hidden', mode !== 'text');
   document.getElementById('mode-pdf-btn').className =
     `flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all ${mode==='pdf' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
   document.getElementById('mode-url-btn').className =
     `flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all ${mode==='url' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
+  document.getElementById('mode-text-btn').className =
+    `flex-1 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all ${mode==='text' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
   checkUploadReady();
 }
 
@@ -487,10 +570,17 @@ function renderQueue() {
 }
 
 function checkUploadReady() {
-  const hasPending = inputMode === 'pdf'
-    ? fileQueue.some(q => q.status === 'pending')
-    : urlQueue.some(q => q.status === 'pending');
+  let hasPending;
+  if (inputMode === 'pdf') hasPending = fileQueue.some(q => q.status === 'pending');
+  else if (inputMode === 'url') hasPending = urlQueue.some(q => q.status === 'pending');
+  else hasPending = (document.getElementById('text-input').value.trim().length >= 200);
   document.getElementById('upload-btn').disabled = !(selectedProvider && hasPending);
+}
+
+function onTextInput() {
+  const len = document.getElementById('text-input').value.length;
+  document.getElementById('text-char-count').textContent = len + ' chars';
+  checkUploadReady();
 }
 
 async function doUploadAll() {
@@ -519,7 +609,7 @@ async function doUploadAll() {
       } catch(e) { item.status = 'error'; item.msg = e.message.slice(0, 40); errors++; }
       renderQueue();
     }
-  } else {
+  } else if (inputMode === 'url') {
     const pending = urlQueue.filter(q => q.status === 'pending');
     if (!pending.length) return;
     for (const item of pending) {
@@ -535,6 +625,20 @@ async function doUploadAll() {
       } catch(e) { item.status = 'error'; item.msg = e.message.slice(0, 40); errors++; }
       renderUrlQueue();
     }
+  } else if (inputMode === 'text') {
+    const text = document.getElementById('text-input').value.trim();
+    const title = document.getElementById('text-title').value.trim() || 'Manual paste';
+    if (text.length < 200) { toast('Text too short — minimum 200 characters.', 'error'); return; }
+    try {
+      const data = await apiFetch('/api/admin/ingest-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: selectedProvider, text, title }),
+      });
+      totalChunks = data.chunks_created; doneCount = 1;
+      document.getElementById('text-input').value = '';
+      document.getElementById('text-char-count').textContent = '0 chars';
+    } catch(e) { errors = 1; toast(e.message, 'error'); }
   }
 
   if (doneCount > 0) {
@@ -605,6 +709,183 @@ async function deleteProvider(id, name) {
   }
 }
 
+// ── SECTION TOGGLE (within Add SLA Docs tab) ─────────────────────────────────
+
+function setUploadSection(section) {
+  document.getElementById('upload-section').classList.toggle('hidden', section !== 'upload');
+  document.getElementById('search-section').classList.toggle('hidden', section !== 'search');
+  document.getElementById('section-upload-btn').className =
+    `px-4 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${section === 'upload' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
+  document.getElementById('section-search-btn').className =
+    `px-4 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${section === 'search' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:border-blue-400'}`;
+  if (section === 'search' && selectedProvider) {
+    document.getElementById('search-provider').value = selectedProvider;
+  }
+}
+
+// ── SEARCH WEB SECTION ───────────────────────────────────────────────────────
+
+let discoverResults = [];
+let selectedDiscoverUrls = new Set();
+
+async function doProviderSearch() {
+  const provider = document.getElementById('search-provider').value.trim();
+  if (!provider) { toast('Enter a provider name first.', 'error'); return; }
+
+  const btn = document.getElementById('search-web-btn');
+  const infoMsg = document.getElementById('search-info-msg');
+  btn.disabled = true;
+  infoMsg.classList.add('hidden');
+  document.getElementById('search-spinner').classList.remove('hidden');
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-ingest-bar').classList.add('hidden');
+  selectedDiscoverUrls.clear();
+
+  try {
+    const data = await apiFetch('/api/search/sla', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: provider + ' service level agreement SLA', max_results: 10 }),
+    });
+    discoverResults = data.results || [];
+    renderDiscoverResults(discoverResults);
+    if (data.info) {
+      infoMsg.textContent = data.info;
+      infoMsg.classList.remove('hidden');
+    }
+  } catch(e) {
+    toast('Search failed: ' + e.message, 'error');
+    document.getElementById('search-results').innerHTML =
+      `<p class="text-sm text-red-500">${e.message}</p>`;
+  } finally {
+    btn.disabled = false;
+    document.getElementById('search-spinner').classList.add('hidden');
+  }
+}
+
+function renderDiscoverResults(results) {
+  const el = document.getElementById('search-results');
+  const bar = document.getElementById('search-ingest-bar');
+  if (!results.length) {
+    el.innerHTML = '<p class="text-sm text-slate-400">No results found. Try a different provider name.</p>';
+    bar.classList.add('hidden');
+    return;
+  }
+  el.innerHTML = results.map(r => `
+    <div class="result-row flex items-start gap-3 py-3 border-b border-slate-100 last:border-0" data-url="${r.url.replace(/"/g,'&quot;')}">
+      <input type="checkbox" class="mt-1 rounded" onchange="toggleDiscoverUrl('${r.url.replace(/'/g,"\\'")}', this)" />
+      <div class="result-detail flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <span class="text-sm font-medium text-slate-800 truncate">${r.title}</span>
+          <span class="badge ${r.is_pdf ? 'badge-blue' : 'badge-gray'}">${r.is_pdf ? 'PDF' : 'HTML'}</span>
+          ${r.relevance_score >= 4 ? '<span class="badge badge-green">High relevance</span>' : ''}
+          <span class="ingest-status"></span>
+        </div>
+        <a href="${r.url}" target="_blank" rel="noopener"
+           class="text-xs text-blue-600 hover:underline truncate block mb-1">${r.url}</a>
+        <p class="text-xs text-slate-500 leading-relaxed line-clamp-2">${r.snippet}</p>
+      </div>
+    </div>`).join('');
+  bar.classList.remove('hidden');
+  updateDiscoverSelectedCount();
+}
+
+function toggleDiscoverUrl(url, cb) {
+  if (cb.checked) selectedDiscoverUrls.add(url);
+  else selectedDiscoverUrls.delete(url);
+  updateDiscoverSelectedCount();
+}
+
+function updateDiscoverSelectedCount() {
+  const n = selectedDiscoverUrls.size;
+  document.getElementById('search-selected-count').textContent =
+    n === 0 ? '0 selected' : `${n} URL${n > 1 ? 's' : ''} selected`;
+  document.getElementById('search-ingest-btn').disabled = n === 0;
+}
+
+async function doIngestSelected() {
+  const provider = document.getElementById('search-provider').value.trim();
+  if (!provider) { toast('Enter a provider name first.', 'error'); return; }
+  if (!selectedDiscoverUrls.size) { toast('Select at least one result.', 'error'); return; }
+
+  const btn = document.getElementById('search-ingest-btn');
+  btn.disabled = true;
+  btn.textContent = 'Ingesting…';
+
+  try {
+    const data = await apiFetch('/api/search/ingest-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, urls: [...selectedDiscoverUrls] }),
+    });
+    const ok   = data.results.filter(r => !r.error).length;
+    const fail = data.results.filter(r =>  r.error).length;
+
+    // Annotate result rows in the results panel
+    data.results.forEach(r => {
+      const shortUrl = r.url.slice(0, 60);
+      const row = [...document.querySelectorAll('#search-results .result-row')]
+        .find(el => el.dataset.url === r.url);
+      if (row) {
+        const tag = row.querySelector('.ingest-status');
+        if (tag) {
+          tag.textContent = r.error ? '✗ Failed' : '✓ Ingested';
+          tag.className = `ingest-status text-xs font-semibold ${r.error ? 'text-red-500' : 'text-green-600'}`;
+          if (r.error) {
+            const errEl = document.createElement('p');
+            errEl.className = 'text-xs text-red-400 mt-1 leading-snug';
+            errEl.textContent = r.error.replace('400: ', '').replace('500: ', '').slice(0, 120);
+            row.querySelector('.result-detail')?.appendChild(errEl);
+          }
+        }
+      }
+    });
+
+    if (ok) { loadProviders(); loadChatProviders(); }
+    toast(`${ok} ingested${fail ? `, ${fail} failed — see details above` : ''}.`,
+          fail && !ok ? 'error' : 'success');
+  } catch(e) {
+    toast('Ingest failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Ingest Selected';
+  }
+}
+
+// ── AUTO-FETCH (Query tab banners) ────────────────────────────────────────────
+
+let _lastQueryText = '';
+
+async function doAutoFetch() {
+  const provider = document.getElementById('search-provider').value.trim() || null;
+  const autoBtn = document.getElementById('auto-fetch-btn');
+  const lowBtn  = document.getElementById('low-conf-btn');
+  if (autoBtn) { autoBtn.disabled = true; autoBtn.textContent = 'Fetching…'; }
+  if (lowBtn)  { lowBtn.disabled  = true; lowBtn.textContent  = 'Fetching…'; }
+
+  try {
+    const data = await apiFetch('/api/search/auto-fetch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: _lastQueryText, provider }),
+    });
+    toast(data.message, data.ingested > 0 ? 'success' : 'error');
+    document.getElementById('auto-fetch-banner').classList.add('hidden');
+    document.getElementById('low-conf-banner').classList.add('hidden');
+    if (data.ingested > 0) {
+      loadProviders();
+      loadChatProviders();
+      // Re-run the original query automatically
+      if (_lastQueryText) doQuery();
+    }
+  } catch(e) {
+    toast('Auto-fetch failed: ' + e.message, 'error');
+  } finally {
+    if (autoBtn) { autoBtn.disabled = false; autoBtn.textContent = 'Auto-fetch SLA Docs'; }
+    if (lowBtn)  { lowBtn.disabled  = false; lowBtn.textContent  = 'Fetch Updated SLAs'; }
+  }
+}
+
 // ── QUERY TAB ────────────────────────────────────────────────────────────────
 
 let currentQueryId = null; // stored after each successful query
@@ -612,6 +893,7 @@ let currentQueryId = null; // stored after each successful query
 async function doQuery() {
   const text = document.getElementById('query-text').value.trim();
   if (!text) { toast('Please enter your requirements.', 'error'); return; }
+  _lastQueryText = text;
 
   const weights = {
     uptime:   parseFloat(document.getElementById('w-uptime').value),
@@ -624,6 +906,8 @@ async function doQuery() {
   document.getElementById('query-btn').disabled = true;
   document.getElementById('query-spinner').classList.remove('hidden');
   document.getElementById('query-results').innerHTML = '';
+  document.getElementById('auto-fetch-banner').classList.add('hidden');
+  document.getElementById('low-conf-banner').classList.add('hidden');
 
   try {
     const data = await apiFetch('/api/query', {
@@ -632,7 +916,24 @@ async function doQuery() {
       body: JSON.stringify({ text, weights }),
     });
     currentQueryId = data.query_id;
+
+    // Auto-fetch banner: no docs ingested yet
+    if (data.auto_fetch_available) {
+      document.getElementById('auto-fetch-title').textContent = 'No SLA documents found';
+      document.getElementById('auto-fetch-body').textContent = data.message || '';
+      document.getElementById('auto-fetch-banner').classList.remove('hidden');
+      document.getElementById('query-results').innerHTML =
+        '<div class="card p-6 text-slate-400 text-sm text-center">No documents ingested. Use Auto-fetch or the Search Web tab to add SLA documents.</div>';
+      return;
+    }
+
     renderResults(data);
+
+    // Low-confidence banner: poor semantic match in existing docs
+    if (data.low_confidence) {
+      document.getElementById('low-conf-suggestion').textContent = data.suggestion || '';
+      document.getElementById('low-conf-banner').classList.remove('hidden');
+    }
   } catch(e) {
     toast(e.message, 'error');
     document.getElementById('query-results').innerHTML =
@@ -803,34 +1104,144 @@ function renderComparison(rows) {
   const el = document.getElementById('compare-results');
   if (!rows.length) { el.innerHTML = '<p class="text-sm text-slate-400">No SLA metrics found. Ingest documents first.</p>'; return; }
 
-  const fields = [
-    ['uptime_sla_pct',      'Uptime SLA',     v => v != null ? `${v}%` : '—'],
-    ['rto_hours',           'RTO',            v => v != null ? `${v}h` : '—'],
-    ['rpo_hours',           'RPO',            v => v != null ? `${v}h` : '—'],
-    ['support_response_min','Support',        v => v != null ? `${v} min` : '—'],
-    ['penalty_credit_pct',  'Penalty Credit', v => v != null ? `${v}%` : '—'],
-    ['regions',             'Regions',        v => v?.length ? v.join(', ') : '—'],
-    ['compliance',          'Compliance',     v => v?.length ? v.map(c=>`<span class="badge badge-gray">${c}</span>`).join(' ') : '—'],
-    ['source_clause',       'Source Clause',  v => v ? `<span class="text-xs text-slate-500">${v.slice(0,120)}…</span>` : '—'],
+  // Metric config: [key, label, formatter, higherIsBetter]
+  const numericFields = [
+    ['uptime_sla_pct',       'Uptime SLA',     v => v != null ? `${v}%` : null,       true],
+    ['rto_hours',            'RTO (Recovery)',  v => v != null ? `${v}h` : null,        false],
+    ['rpo_hours',            'RPO (Data Loss)', v => v != null ? `${v}h` : null,        false],
+    ['support_response_min', 'Support Response',v => v != null ? `${v} min` : null,     false],
+    ['penalty_credit_pct',   'Penalty Credit',  v => v != null ? `${v}%` : null,       true],
+  ];
+  const textFields = [
+    ['regions',    'Regions',       v => v?.length ? v.join(', ') : null],
+    ['compliance', 'Compliance',    v => v?.length ? v.map(c=>`<span class="badge badge-gray">${c}</span>`).join(' ') : null],
+    ['source_clause','Source Clause',v => v ? `<span class="text-xs text-slate-500 leading-relaxed">${v.slice(0,140)}…</span>` : null],
   ];
 
-  let table = `<table class="w-full text-sm border-collapse">
+  // Compute per-row winner for numeric fields
+  function getBest(key, higherIsBetter) {
+    const vals = rows.map(r => r.metrics?.[key]).filter(v => v != null);
+    if (!vals.length) return null;
+    return higherIsBetter ? Math.max(...vals) : Math.min(...vals);
+  }
+  function getWorst(key, higherIsBetter) {
+    const vals = rows.map(r => r.metrics?.[key]).filter(v => v != null);
+    if (!vals.length) return null;
+    return higherIsBetter ? Math.min(...vals) : Math.max(...vals);
+  }
+
+  function cellStyle(val, best, worst, higherIsBetter) {
+    if (val == null || best == null) return '';
+    if (val === best) return 'background:#f0fdf4;'; // green tint
+    if (rows.length > 2 && val === worst) return 'background:#fff1f2;'; // red tint only with 3+ providers
+    return 'background:#fefce8;'; // yellow tint for middle
+  }
+
+  function advantageBadge(val, best, worst, higherIsBetter, key) {
+    if (val == null || best == null || val !== best) return '';
+    // Calculate how much better than next-best
+    const others = rows.map(r => r.metrics?.[key]).filter(v => v != null && v !== best);
+    if (!others.length) return '<span class="badge badge-green ml-1">Best</span>';
+    const nextBest = higherIsBetter ? Math.max(...others) : Math.min(...others);
+    if (nextBest === 0) return '<span class="badge badge-green ml-1">Best</span>';
+    const pctDiff = Math.abs((val - nextBest) / nextBest * 100);
+    if (pctDiff < 0.5) return '<span class="badge badge-green ml-1">Best</span>';
+    const dir = higherIsBetter ? '↑' : '↓';
+    return `<span class="badge badge-green ml-1">Best ${dir}${pctDiff.toFixed(0)}%</span>`;
+  }
+
+  let html = '';
+
+  // Summary advantage cards (top of compare)
+  if (rows.length > 1) {
+    const winCounts = {};
+    rows.forEach(r => { winCounts[r.provider] = 0; });
+    numericFields.forEach(([key, , , hib]) => {
+      const best = getBest(key, hib);
+      if (best == null) return;
+      rows.forEach(r => { if (r.metrics?.[key] === best) winCounts[r.provider]++; });
+    });
+    const maxWins = Math.max(...Object.values(winCounts));
+    html += `<div class="flex gap-3 mb-5 flex-wrap">`;
+    rows.forEach(r => {
+      const wins = winCounts[r.provider] || 0;
+      const isTop = wins === maxWins && maxWins > 0;
+      html += `<div class="flex-1 min-w-[120px] rounded-xl border-2 p-3 text-center ${isTop ? 'border-green-400 bg-green-50' : 'border-slate-200 bg-white'}">
+        <div class="font-bold text-slate-800 text-sm">${r.provider}</div>
+        <div class="text-xs mt-1 ${isTop ? 'text-green-700 font-semibold' : 'text-slate-400'}">
+          ${wins} metric${wins !== 1 ? 's' : ''} best${isTop ? ' 🏆' : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Metrics table
+  html += `<div class="overflow-x-auto"><table class="w-full text-sm border-collapse">
     <thead>
       <tr class="bg-slate-50">
-        <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 border border-slate-200">Metric</th>
+        <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 border border-slate-200 whitespace-nowrap">Metric</th>
         ${rows.map(r => `<th class="text-left py-2 px-3 text-xs font-semibold text-slate-700 border border-slate-200">${r.provider}</th>`).join('')}
       </tr>
     </thead>
-    <tbody>
-      ${fields.map(([key, label, fmt]) => `
-        <tr class="hover:bg-slate-50">
-          <td class="py-2 px-3 font-medium text-slate-600 border border-slate-200 whitespace-nowrap">${label}</td>
-          ${rows.map(r => `<td class="py-2 px-3 border border-slate-200">${fmt(r.metrics?.[key])}</td>`).join('')}
-        </tr>`).join('')}
-    </tbody>
-  </table>`;
+    <tbody>`;
 
-  el.innerHTML = table;
+  numericFields.forEach(([key, label, fmt, hib]) => {
+    const best = getBest(key, hib);
+    const worst = getWorst(key, hib);
+    html += `<tr>
+      <td class="py-2 px-3 font-medium text-slate-600 border border-slate-200 whitespace-nowrap">${label}</td>
+      ${rows.map(r => {
+        const v = r.metrics?.[key];
+        const display = fmt(v) || '—';
+        const style = cellStyle(v, best, worst, hib);
+        const badge = advantageBadge(v, best, worst, hib, key);
+        return `<td class="py-2 px-3 border border-slate-200" style="${style}">
+          <span class="font-medium">${display}</span>${badge}
+        </td>`;
+      }).join('')}
+    </tr>`;
+  });
+
+  textFields.forEach(([key, label, fmt]) => {
+    html += `<tr class="hover:bg-slate-50">
+      <td class="py-2 px-3 font-medium text-slate-600 border border-slate-200 whitespace-nowrap">${label}</td>
+      ${rows.map(r => {
+        const v = r.metrics?.[key];
+        const display = fmt(v) || '—';
+        return `<td class="py-2 px-3 border border-slate-200">${display}</td>`;
+      }).join('')}
+    </tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+
+  // Pricing section
+  const hasPrice = rows.some(r => r.pricing?.length);
+  if (hasPrice) {
+    html += `<div class="mt-6">
+      <h3 class="font-semibold text-slate-700 text-sm mb-3">Pricing Comparison</h3>
+      <div class="overflow-x-auto"><table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-slate-50">
+          <th class="text-left py-2 px-3 text-xs font-semibold text-slate-500 border border-slate-200">Service</th>
+          ${rows.filter(r => r.pricing?.length).map(r => `<th class="text-left py-2 px-3 text-xs font-semibold text-slate-700 border border-slate-200">${r.provider}</th>`).join('')}
+        </tr></thead>
+        <tbody>`;
+    // Collect all unique services across providers
+    const allServices = [...new Set(rows.flatMap(r => (r.pricing||[]).map(p => p.service)))].slice(0, 8);
+    allServices.forEach(svc => {
+      html += `<tr class="hover:bg-slate-50">
+        <td class="py-2 px-3 font-medium text-slate-600 border border-slate-200 whitespace-nowrap text-xs">${svc || 'Standard'}</td>
+        ${rows.filter(r => r.pricing?.length).map(r => {
+          const item = (r.pricing||[]).find(p => p.service === svc);
+          return `<td class="py-2 px-3 border border-slate-200 text-xs">${item ? `$${(item.price_usd||0).toFixed(4)}/${item.unit||'unit'}` : '—'}</td>`;
+        }).join('')}
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+
+  el.innerHTML = html;
 }
 
 // ── CHAT TAB ──────────────────────────────────────────────────────────────────

@@ -26,6 +26,10 @@ celery_app.conf.beat_schedule = {
         "task": "tasks.refresh_all_sla_documents",
         "schedule": crontab(hour=2, minute=0, day_of_week=0),  # Sunday
     },
+    "discover-new-slas-weekly": {
+        "task": "tasks.discover_and_ingest_new_slas",
+        "schedule": crontab(hour=3, minute=0, day_of_week=1),  # Monday
+    },
 }
 
 celery_app.conf.timezone = "UTC"

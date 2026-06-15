@@ -6,23 +6,29 @@ services:
       - "8000:8000"
     env_file: .env
     depends_on:
-      - postgres
-      - redis
-      - chromadb
-      - libretranslate
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
     volumes:
       - ./backend:/app
       - ./chromadb:/app/chromadb
       - ./sla_docs:/app/sla_docs
       - ~/.cache/huggingface:/root/.cache/huggingface
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
   frontend:
-    image: nginx:alpine
+    build: ./frontend
     ports:
       - "3000:80"
-    volumes:
-      - ./frontend/placeholder:/usr/share/nginx/html:ro
     depends_on:
       - api
     restart: unless-stopped
@@ -30,20 +36,30 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_DB: cloudsla
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB:-cloudsla}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-user} -d $${POSTGRES_DB:-cloudsla}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   chromadb:
     image: chromadb/chroma:latest
@@ -53,19 +69,15 @@ services:
       - chroma_data:/chroma/chroma
     restart: unless-stopped
 
-  libretranslate:
-    image: libretranslate/libretranslate
-    ports:
-      - "5001:5000"
-    restart: unless-stopped
-
   celery_worker:
     build: ./backend
     command: celery -A app.celery_app worker --loglevel=info
     env_file: .env
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
       - ./backend:/app
       - ./chromadb:/app/chromadb
@@ -77,7 +89,8 @@ services:
     command: celery -A app.celery_app beat --loglevel=info
     env_file: .env
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     volumes:
       - ./backend:/app
     restart: unless-stopped

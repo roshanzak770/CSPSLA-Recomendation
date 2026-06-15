@@ -27,21 +27,24 @@ def ask_sla(req: AskRequest):
         for i, c in enumerate(top_chunks)
     )
 
+    lang = req.lang or "English"
     try:
         response = llm_router.reasoner.chat_completion(
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are a cloud SLA expert. Answer questions in plain English using "
+                        f"You are a cloud SLA expert. Answer questions using "
                         "only the provided SLA excerpts. Write 3-5 bullet points maximum. "
                         "Cite page numbers like (Azure, p.11). Never copy legal text verbatim. "
-                        "Stop immediately after answering — do not add examples or new questions."
+                        "Stop immediately after answering — do not add examples or new questions. "
+                        f"IMPORTANT: You MUST respond entirely in {lang}. "
+                        f"Even if the question is in a different language, answer in {lang}."
                     ),
                 },
                 {"role": "user", "content": f"SLA Excerpts:\n{context}\n\nQuestion: {req.question}"},
             ],
-            max_tokens=350,
+            max_tokens=400,
             temperature=0.2,
             stop=["Question:", "\nQuestion", "SLA Excerpts:"],
         )

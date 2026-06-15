@@ -42,7 +42,7 @@ async def list_ingested_providers(db: AsyncSession = Depends(get_db)):
         {
             "id": str(row.Provider.id),
             "name": row.Provider.name,
-            "doc_count": row.doc_count,
+            "document_count": row.doc_count,
             "website": row.Provider.website,
         }
         for row in rows

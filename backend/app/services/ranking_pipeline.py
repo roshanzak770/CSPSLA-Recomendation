@@ -173,7 +173,7 @@ def _build_xgb_record(
 def stage6_explain(
     english_query: str,
     top_results: List[ProviderResult],
-    lang: str,
+    lang: str = "English",
 ) -> str:
     from app.services.llm_router import llm_router
     try:
@@ -190,12 +190,7 @@ def stage6_explain(
             }
             for r in top_results
         ]
-        lang_name = {
-            "ar": "Arabic", "fr": "French", "de": "German",
-            "es": "Spanish", "zh": "Chinese",
-        }.get(lang, "English")
-
-        return llm_router.generate_explanation(english_query, provider_data, lang_name)
+        return llm_router.generate_explanation(english_query, provider_data, lang)
     except Exception as e:
         logger.warning("LLM explanation failed: %s", e)
         return ""
@@ -209,6 +204,7 @@ def run_pipeline(
     raw_query: str,
     providers_with_metrics: list,          # list of (provider_id, provider_name, metrics_obj | None)
     weights: dict | None = None,
+    lang: str = "English",                 # user-chosen response language
 ) -> PipelineResult:
     """
     Run all 6 stages and return a PipelineResult.
@@ -289,7 +285,7 @@ def run_pipeline(
         ))
 
     # Stage 6 — single explanation for full ranking
-    explanation = stage6_explain(english_query, results[:3], detected_lang)
+    explanation = stage6_explain(english_query, results[:3], lang)
     if explanation:
         results[0].explanation = explanation
 

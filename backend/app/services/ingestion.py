@@ -20,14 +20,22 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
 
+_model_cache = None
+_chroma_client_cache = None
+
 
 def _get_chroma_client() -> chromadb.HttpClient:
-    return chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+    global _chroma_client_cache
+    if _chroma_client_cache is None:
+        _chroma_client_cache = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
+    return _chroma_client_cache
 
 
 def _get_embedding_model() -> SentenceTransformer:
-    # Loaded once; caller is responsible for caching
-    return SentenceTransformer(EMBEDDING_MODEL)
+    global _model_cache
+    if _model_cache is None:
+        _model_cache = SentenceTransformer(EMBEDDING_MODEL)
+    return _model_cache
 
 
 def extract_text_from_pdf(pdf_path: str) -> List[dict]:
@@ -172,6 +180,10 @@ def search_sla(
     client = _get_chroma_client()
     collection = client.get_or_create_collection(name="sla_documents")
 
+    total = collection.count()
+    if total == 0:
+        return []
+
     # multilingual-e5 expects "query: " prefix for queries
     embedding = model.encode([f"query: {query}"], show_progress_bar=False).tolist()
 
@@ -179,7 +191,7 @@ def search_sla(
 
     results = collection.query(
         query_embeddings=embedding,
-        n_results=top_k,
+        n_results=min(top_k, total),
         where=where,
         include=["documents", "metadatas", "distances"],
     )

@@ -1,45 +1,82 @@
 """
-LLM Router — wraps HuggingFace Inference API for:
-  - SLA metrics extraction  (Llama-3.1-8B-Instruct)
-  - Query understanding     (Qwen2.5-7B-Instruct)
-  - Ranking explanation     (Qwen2.5-7B-Instruct)
+LLM Router — Groq API (llama-3.1-8b-instant).
+
+Free tier: 14,400 requests/day, 30 req/min.
+Fallback: llama-3.2-3b-preview if primary is rate-limited.
 """
 
 import json
 import re
+import logging
 
-from huggingface_hub import InferenceClient
+import requests
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+_BASE_URL      = "https://api.groq.com/openai/v1/chat/completions"
+_PRIMARY_MODEL = "llama-3.1-8b-instant"
+_FALLBACK_MODEL = "llama-3.2-3b-preview"
+_TIMEOUT = 30
+
+
+def _chat(messages: list, max_tokens: int = 500, temperature: float = 0.1) -> str:
+    """Call Groq chat completions. Tries primary then fallback model."""
+    headers = {
+        "Authorization": f"Bearer {settings.groq_api_key}",
+        "Content-Type": "application/json",
+    }
+    for model in [_PRIMARY_MODEL, _FALLBACK_MODEL]:
+        try:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            r = requests.post(_BASE_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            logger.warning("Groq %s returned %s: %s", model, r.status_code, r.text[:200])
+        except Exception as e:
+            logger.warning("Groq %s error: %s", model, e)
+    raise RuntimeError("Groq API unavailable")
+
 
 class LLMRouter:
+
+    class _Client:
+        """Shim so ask.py can call llm_router.reasoner.chat_completion(...)."""
+        def chat_completion(self, messages, max_tokens=500, temperature=0.2, stop=None):
+            text = _chat(messages, max_tokens=max_tokens, temperature=temperature)
+
+            class _Msg:
+                content = text
+            class _Choice:
+                message = _Msg()
+            class _Resp:
+                choices = [_Choice()]
+            return _Resp()
+
     def __init__(self):
-        self.extractor = InferenceClient(
-            model="HuggingFaceH4/zephyr-7b-beta",
-            token=settings.hf_token,
-        )
-        self.reasoner = InferenceClient(
-            model="HuggingFaceH4/zephyr-7b-beta",
-            token=settings.hf_token,
-        )
+        self.extractor = self._Client()
+        self.reasoner  = self._Client()
 
     def _parse_json(self, text: str) -> dict:
-        """Extract JSON from LLM output, stripping markdown fences if present."""
         text = text.strip()
-        # Remove ```json ... ``` or ``` ... ``` fences
         match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
         if match:
             text = match.group(1)
+        brace = re.search(r"\{[\s\S]+\}", text)
+        if brace:
+            text = brace.group(0)
         return json.loads(text)
 
     def extract_sla_metrics(self, sla_text: str) -> dict:
-        """
-        Given raw SLA text, extract structured metrics.
-        Returns a dict with keys: uptime_sla_pct, rto_hours, rpo_hours,
-        support_response_min, penalty_credit_pct, regions, compliance, source_clause.
-        """
-        prompt = f"""Extract SLA metrics from this text. Return ONLY valid JSON with these exact keys:
+        raw = _chat([
+            {"role": "system", "content": "You are an SLA data extractor. Return ONLY valid JSON, no explanation."},
+            {"role": "user",   "content": f"""Extract SLA metrics from this text. Return ONLY valid JSON:
 {{
   "uptime_sla_pct": float or null,
   "rto_hours": float or null,
@@ -48,26 +85,16 @@ class LLMRouter:
   "penalty_credit_pct": int or null,
   "regions": ["string"],
   "compliance": ["string"],
-  "source_clause": "exact quote from text"
+  "source_clause": "exact quote"
 }}
-Text:
-{sla_text}"""
-
-        response = self.extractor.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0,
-        )
-        raw = response.choices[0].message.content
+Text: {sla_text[:2000]}"""},
+        ], max_tokens=500, temperature=0)
         return self._parse_json(raw)
 
     def understand_query(self, query: str) -> dict:
-        """
-        Parse a natural language user query into structured requirements.
-        Returns dict with uptime_required_pct, rto_hours, rpo_hours, region,
-        country, compliance, category, sensitivity, budget_usd_monthly.
-        """
-        prompt = f"""Extract cloud service requirements from this user query. Return ONLY valid JSON:
+        raw = _chat([
+            {"role": "system", "content": "You are a cloud requirements parser. Return ONLY valid JSON, no explanation."},
+            {"role": "user",   "content": f"""Extract requirements. Return ONLY valid JSON:
 {{
   "uptime_required_pct": float or null,
   "rto_hours": float or null,
@@ -79,63 +106,34 @@ Text:
   "sensitivity": "LOW|MEDIUM|HIGH",
   "budget_usd_monthly": float or null
 }}
-Query: {query}"""
-
-        response = self.reasoner.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0,
-        )
-        raw = response.choices[0].message.content
+Query: {query}"""},
+        ], max_tokens=300, temperature=0)
         return self._parse_json(raw)
 
     def generate_explanation(self, query: str, providers: list, lang: str = "English") -> str:
-        """
-        Generate a human-readable ranking explanation for the top providers.
-        Returns plain text response in the specified language.
-        """
-        provider_summary = json.dumps(providers, indent=2)
-        prompt = f"""User requirement: {query}
+        return _chat([
+            {"role": "system", "content": "You are a cloud SLA analyst. Write concise, factual explanations."},
+            {"role": "user",   "content": f"""User requirement: {query}
 
-Ranked cloud providers with SLA data:
-{provider_summary}
+Ranked providers (with SLA data):
+{json.dumps(providers, indent=2)}
 
-Write a concise explanation of the ranking, citing specific SLA clauses.
-Mention why each provider ranked where it did relative to the user's requirements.
-Respond in {lang}."""
-
-        response = self.reasoner.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=600,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
+Write 3-5 sentences explaining the ranking, citing specific SLA metrics.
+Respond in {lang}."""},
+        ], max_tokens=400, temperature=0.3)
 
     def describe_sla_change(self, old_chunk: str, new_chunk: str) -> dict:
-        """
-        Given two SLA text chunks, describe what changed and classify severity.
-        Returns: {"description": str, "severity": "LOW|MEDIUM|HIGH|CRITICAL|POSITIVE"}
-        """
-        prompt = f"""Compare these two SLA document excerpts and identify what changed.
-Return ONLY valid JSON:
+        raw = _chat([
+            {"role": "system", "content": "You are an SLA change analyst. Return ONLY valid JSON."},
+            {"role": "user",   "content": f"""Compare these SLA excerpts. Return ONLY valid JSON:
 {{
-  "description": "one sentence describing the change",
+  "description": "one sentence",
   "change_type": "UPTIME_REDUCED|UPTIME_IMPROVED|RTO_INCREASED|RTO_REDUCED|PENALTY_REDUCED|PENALTY_INCREASED|REGION_REMOVED|COMPLIANCE_REMOVED|WORDING_CHANGE|OTHER",
   "severity": "LOW|MEDIUM|HIGH|CRITICAL|POSITIVE"
 }}
-
-Old text:
-{old_chunk}
-
-New text:
-{new_chunk}"""
-
-        response = self.reasoner.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0,
-        )
-        raw = response.choices[0].message.content
+Old: {old_chunk[:500]}
+New: {new_chunk[:500]}"""},
+        ], max_tokens=200, temperature=0)
         return self._parse_json(raw)
 
 
