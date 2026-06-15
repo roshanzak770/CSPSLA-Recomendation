@@ -1,8 +1,6 @@
 # CloudSLA Recommender
 
-An AI-powered cloud SLA recommendation engine. It ingests SLA documents from major cloud providers (AWS, Azure, GCP, Oracle, IBM), ranks them using a 6-stage pipeline (semantic search → TOPSIS → XGBoost), and explains recommendations in 18 languages.
-
----
+An AI-powered cloud SLA recommendation engine. It ingests SLA documents from major cloud providers (AWS, Azure, GCP, Oracle, IBM), ranks them using a 6-stage pipeline (semantic search → TOPSIS → XGBoost), and explains recommendations in your desired language.
 
 ## Features
 
