@@ -26,7 +26,7 @@ else:
     _TEST_DB_URL = _raw_url  # sqlite+aiosqlite or other
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def test_engine():
     engine = create_async_engine(_TEST_DB_URL)
     async with engine.begin() as conn:
@@ -37,7 +37,7 @@ async def test_engine():
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def client(test_engine):
     SessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
