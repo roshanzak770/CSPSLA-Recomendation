@@ -5,6 +5,8 @@ POST   /api/admin/ingest-url        — fetch a URL (PDF or HTML) and ingest it
 POST   /api/admin/ingest-text       — ingest raw SLA text pasted by the user
 DELETE /api/admin/provider/{id}     — delete provider and all its data
 POST   /api/admin/refresh-sla       — trigger weekly re-fetch via Celery
+GET    /api/admin/feedback/stats    — feedback counts and XGBoost training status
+POST   /api/admin/retrain-now       — manually trigger XGBoost retraining
 """
 
 import shutil
@@ -14,10 +16,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Security, UploadFile
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 
 from app.core.config import settings
-from app.core.schemas import IngestRequest, IngestUrlRequest, IngestResponse, IngestTextRequest
+from app.core.schemas import IngestRequest, IngestUrlRequest, IngestResponse, IngestTextRequest, FeedbackStatsResponse
 from app.db.session import get_db
 from app.models.models import Provider, SLADocument, SLAChunk, SLAMetrics, Ranking, Feedback, SLAAlert
 from app.services.ingestion import ingest_pdf, _get_embedding_model, chunk_pages, embed_and_store
@@ -487,3 +489,47 @@ async def refresh_sla(_: None = Depends(require_admin)):
     from app.tasks.sla_tasks import refresh_all_sla_documents
     task = refresh_all_sla_documents.delay()
     return {"task_id": task.id}
+
+
+@router.get("/admin/feedback/stats", response_model=FeedbackStatsResponse)
+async def feedback_stats(db: AsyncSession = Depends(get_db), _: None = Depends(require_admin)):
+    from pathlib import Path
+    from app.services.ranker import MODEL_PATH
+    from app.models.models import Feedback
+
+    RETRAIN_THRESHOLD = 10
+    AUTO_RETRAIN_EVERY = 100
+
+    total_result = await db.execute(select(func.count(Feedback.id)))
+    total = total_result.scalar_one()
+
+    signal_rows = await db.execute(
+        select(Feedback.signal_type, func.count(Feedback.id).label("cnt"))
+        .group_by(Feedback.signal_type)
+    )
+    by_signal = {row.signal_type: row.cnt for row in signal_rows.all()}
+
+    pairs_result = await db.execute(
+        select(func.count()).select_from(
+            select(Feedback.query_id, Feedback.provider_id).distinct().subquery()
+        )
+    )
+    unique_pairs = pairs_result.scalar_one()
+
+    return FeedbackStatsResponse(
+        total_feedbacks=total,
+        by_signal=by_signal,
+        unique_training_pairs=unique_pairs,
+        retrain_threshold=RETRAIN_THRESHOLD,
+        can_retrain=unique_pairs >= RETRAIN_THRESHOLD,
+        feedbacks_until_auto_retrain=(AUTO_RETRAIN_EVERY - total % AUTO_RETRAIN_EVERY) % AUTO_RETRAIN_EVERY,
+        auto_retrain_every=AUTO_RETRAIN_EVERY,
+        xgboost_model_exists=Path(MODEL_PATH).exists(),
+    )
+
+
+@router.post("/admin/retrain-now")
+async def retrain_now(_: None = Depends(require_admin)):
+    from app.tasks.ml_tasks import retrain_xgboost
+    task = retrain_xgboost.delay()
+    return {"task_id": task.id, "status": "queued"}

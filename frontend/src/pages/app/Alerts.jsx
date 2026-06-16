@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Bell, FileText, TrendingUp, TrendingDown, FilePlus, AlertTriangle,
   ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Trash2, Plus,
-  Mail, Zap, ShieldCheck,
+  Mail, Zap, ShieldCheck, Brain, BarChart2, Target, CheckCircle2, XCircle,
 } from 'lucide-react';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -51,6 +51,173 @@ const METRIC_LABELS = {
   rpo_hours: 'RPO (hrs)',
   penalty_credit_pct: 'Penalty Credit (%)',
 };
+
+const SIGNAL_META = {
+  thumbs_up:               { weight: 1.5,  color: 'green',  label: 'Thumbs Up' },
+  accepted_recommendation: { weight: 1.0,  color: 'blue',   label: 'Accepted Recommendation' },
+  clicked_provider:        { weight: 0.3,  color: 'slate',  label: 'Clicked Provider' },
+  ignored_top_result:      { weight: -0.5, color: 'yellow', label: 'Ignored Top Result' },
+  thumbs_down:             { weight: -1.5, color: 'red',    label: 'Thumbs Down' },
+};
+
+// ─── ModelTrainingTab ────────────────────────────────────────────────────────
+
+function ModelTrainingTab() {
+  const qc = useQueryClient();
+  const [retrainMsg, setRetrainMsg] = useState(null);
+
+  const { data: stats, isLoading, isError } = useQuery({
+    queryKey: ['feedbackStats'],
+    queryFn: api.feedbackStats,
+    refetchInterval: 30_000,
+  });
+
+  const retrainMut = useMutation({
+    mutationFn: api.retrainNow,
+    onSuccess: (data) => {
+      setRetrainMsg(`Retrain queued (task ${data.task_id.slice(0, 8)}…)`);
+      qc.invalidateQueries({ queryKey: ['feedbackStats'] });
+      setTimeout(() => setRetrainMsg(null), 6000);
+    },
+    onError: (err) => setRetrainMsg(`Error: ${err.message}`),
+  });
+
+  if (isLoading) return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
+  if (isError)   return <Card className="text-center py-10 text-red-400">Failed to load training stats.</Card>;
+
+  const pairsPct = Math.min(100, Math.round((stats.unique_training_pairs / stats.retrain_threshold) * 100));
+  const barColor = pairsPct >= 100 ? '#10b981' : pairsPct >= 60 ? '#f59e0b' : '#ef4444';
+
+  return (
+    <div className="space-y-4">
+
+      {/* stat cards */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card>
+          <p className="text-xs text-slate-500 mb-1">Total Feedbacks</p>
+          <p className="text-2xl font-bold text-white">{stats.total_feedbacks}</p>
+          <p className="text-xs text-slate-600 mt-1">
+            {stats.feedbacks_until_auto_retrain === 0
+              ? 'Auto-retrain triggers now'
+              : `${stats.feedbacks_until_auto_retrain} until next auto-trigger`}
+          </p>
+        </Card>
+
+        <Card>
+          <p className="text-xs text-slate-500 mb-1">Training Records</p>
+          <p className="text-2xl font-bold text-white">{stats.unique_training_pairs}</p>
+          <p className="text-xs text-slate-600 mt-1">unique (query, provider) pairs</p>
+        </Card>
+
+        <Card>
+          <p className="text-xs text-slate-500 mb-1">Model Status</p>
+          <div className="flex items-center gap-2 mt-1">
+            {stats.xgboost_model_exists
+              ? <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+              : <XCircle      className="w-5 h-5 text-slate-600"   />}
+            <span className={`text-sm font-semibold ${stats.xgboost_model_exists ? 'text-emerald-400' : 'text-slate-500'}`}>
+              {stats.xgboost_model_exists ? 'Trained' : 'Cold Start'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-600 mt-1">
+            {stats.xgboost_model_exists ? 'XGBoost model on disk' : 'Using TOPSIS fallback'}
+          </p>
+        </Card>
+      </div>
+
+      {/* training readiness bar */}
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Target className="w-4 h-4 text-indigo-400" />
+            <span className="text-sm font-medium text-slate-300">Training Readiness</span>
+          </div>
+          <span className="text-xs text-slate-400">
+            {stats.unique_training_pairs} / {stats.retrain_threshold} records needed
+          </span>
+        </div>
+        <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${pairsPct}%`, backgroundColor: barColor }}
+          />
+        </div>
+        {!stats.can_retrain && (
+          <p className="text-xs text-slate-600 mt-2">
+            Need {stats.retrain_threshold - stats.unique_training_pairs} more record(s) before manual retrain is available.
+          </p>
+        )}
+      </Card>
+
+      {/* auto-retrain countdown */}
+      <Card className="flex items-center gap-3">
+        <BarChart2 className="w-5 h-5 text-amber-400 shrink-0" />
+        <div>
+          <p className="text-sm text-slate-300">
+            Auto-retrain triggers every <span className="font-semibold text-white">{stats.auto_retrain_every}</span> feedbacks
+          </p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {stats.feedbacks_until_auto_retrain === 0
+              ? 'Will trigger on next feedback submission'
+              : `${stats.feedbacks_until_auto_retrain} more feedback(s) until next automatic retrain`}
+          </p>
+        </div>
+      </Card>
+
+      {/* signal breakdown */}
+      <Card>
+        <div className="flex items-center gap-2 mb-3">
+          <BarChart2 className="w-4 h-4 text-slate-500" />
+          <span className="text-sm font-medium text-slate-300">Feedback by Signal Type</span>
+        </div>
+        <div className="space-y-2">
+          {Object.entries(SIGNAL_META).map(([signal, meta]) => {
+            const count = stats.by_signal[signal] || 0;
+            return (
+              <div key={signal} className="flex items-center gap-3">
+                <Badge color={meta.color} className="w-44 shrink-0 justify-start text-xs">
+                  {meta.label}
+                </Badge>
+                <span className={`text-xs font-mono shrink-0 w-10 text-right ${meta.weight > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {meta.weight > 0 ? '+' : ''}{meta.weight}
+                </span>
+                <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: stats.total_feedbacks > 0 ? `${(count / stats.total_feedbacks) * 100}%` : '0%',
+                      backgroundColor: meta.weight > 0 ? '#10b981' : '#ef4444',
+                    }}
+                  />
+                </div>
+                <span className="text-xs text-slate-400 shrink-0 w-6 text-right">{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* retrain button */}
+      <div className="flex items-center gap-3">
+        <div title={!stats.can_retrain ? 'Need 10+ training records to retrain' : undefined}>
+          <button
+            onClick={() => retrainMut.mutate()}
+            disabled={!stats.can_retrain || retrainMut.isPending}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {retrainMut.isPending ? <Spinner size="sm" /> : <Brain className="w-4 h-4" />}
+            Retrain Now
+          </button>
+        </div>
+        {retrainMsg && (
+          <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-emerald-400">
+            {retrainMsg}
+          </motion.span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── AlertCard ───────────────────────────────────────────────────────────────
 
@@ -410,8 +577,9 @@ export default function Alerts() {
   });
 
   const tabs = [
-    { id: 'changes',    label: 'SLA Changes',     count: alerts.length },
-    { id: 'thresholds', label: 'Threshold Rules',  count: thresholds.length },
+    { id: 'changes',    label: 'SLA Changes',    count: alerts.length },
+    { id: 'thresholds', label: 'Threshold Rules', count: thresholds.length },
+    { id: 'training',   label: 'Model Training',  count: 0 },
   ];
 
   return (
@@ -516,6 +684,9 @@ export default function Alerts() {
           </div>
         </div>
       )}
+
+      {/* ── Model Training tab ──────────────────────────────────────────── */}
+      {tab === 'training' && <ModelTrainingTab />}
     </div>
   );
 }

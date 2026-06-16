@@ -18,6 +18,7 @@ const post = (path, body) => request(path, { method: 'POST', body: JSON.stringif
 const del = (path) => request(path, { method: 'DELETE' });
 const adminPost = (path, body) => request(path, { method: 'POST', body: JSON.stringify(body), headers: { 'X-Admin-Key': ADMIN_KEY } });
 const adminDel = (path) => request(path, { method: 'DELETE', headers: { 'X-Admin-Key': ADMIN_KEY } });
+const adminGet = (path) => request(path, { headers: { 'X-Admin-Key': ADMIN_KEY } });
 
 export const api = {
   // Health
@@ -72,4 +73,8 @@ export const api = {
   pricingCompare: (providers, service, region) =>
     get(`${BASE}/pricing/compare?providers=${encodeURIComponent(providers)}${service ? `&service=${service}` : ''}${region ? `&region=${region}` : ''}`),
   refreshPricing: () => post(`${BASE}/pricing/refresh`, {}),
+
+  // Model Training
+  feedbackStats: () => adminGet(`${BASE}/admin/feedback/stats`),
+  retrainNow: () => adminPost(`${BASE}/admin/retrain-now`, {}),
 };

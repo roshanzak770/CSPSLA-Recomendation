@@ -30,6 +30,10 @@ celery_app.conf.beat_schedule = {
         "task": "tasks.discover_and_ingest_new_slas",
         "schedule": crontab(hour=3, minute=0, day_of_week=1),  # Monday
     },
+    "retrain-xgboost-weekly": {
+        "task": "tasks.retrain_xgboost",
+        "schedule": crontab(hour=4, minute=0, day_of_week=2),  # Tuesday
+    },
 }
 
 celery_app.conf.timezone = "UTC"

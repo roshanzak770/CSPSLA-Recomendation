@@ -65,6 +65,17 @@ class FeedbackResponse(BaseModel):
     success: bool
 
 
+class FeedbackStatsResponse(BaseModel):
+    total_feedbacks: int
+    by_signal: dict
+    unique_training_pairs: int
+    retrain_threshold: int
+    can_retrain: bool
+    feedbacks_until_auto_retrain: int
+    auto_retrain_every: int
+    xgboost_model_exists: bool
+
+
 # --- Provider schemas ---
 
 class ProviderSchema(BaseModel):
