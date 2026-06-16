@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
+
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -60,21 +62,18 @@ async def client(test_engine):
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_health_returns_ok(client):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
 
 
-@pytest.mark.asyncio
 async def test_list_providers_returns_empty_list_on_fresh_db(client):
     resp = await client.get("/api/providers")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-@pytest.mark.asyncio
 async def test_query_with_no_docs_returns_auto_fetch_flag(client):
     resp = await client.post("/api/query", json={"text": "I need 99.99% uptime"})
     assert resp.status_code == 200
@@ -83,13 +82,11 @@ async def test_query_with_no_docs_returns_auto_fetch_flag(client):
     assert body["rankings"] == []
 
 
-@pytest.mark.asyncio
 async def test_compare_unknown_providers_returns_404(client):
     resp = await client.get("/api/compare?providers=NonExistentProvider")
     assert resp.status_code == 404
 
 
-@pytest.mark.asyncio
 async def test_admin_ingest_text_requires_key(client):
     resp = await client.post(
         "/api/admin/ingest-text",
@@ -98,7 +95,6 @@ async def test_admin_ingest_text_requires_key(client):
     assert resp.status_code == 403
 
 
-@pytest.mark.asyncio
 async def test_admin_ingest_text_succeeds_with_key(client):
     with patch("app.api.routes.admin.embed_and_store", return_value=["chunk_0", "chunk_1"]):
         resp = await client.post(
