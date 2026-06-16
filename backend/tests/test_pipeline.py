@@ -24,7 +24,7 @@ def test_stage1_returns_requirements_on_llm_success():
         "category": "database",
         "sensitivity": "HIGH",
     }
-    with patch("app.services.ranking_pipeline.llm_router") as mock_llm:
+    with patch("app.services.llm_router.llm_router") as mock_llm:
         mock_llm.understand_query.return_value = mock_parsed
         req = stage1_understand_query("I need 99.99% uptime in Germany with HIPAA")
 
@@ -35,7 +35,7 @@ def test_stage1_returns_requirements_on_llm_success():
 
 
 def test_stage1_returns_empty_requirements_on_llm_failure():
-    with patch("app.services.ranking_pipeline.llm_router") as mock_llm:
+    with patch("app.services.llm_router.llm_router") as mock_llm:
         mock_llm.understand_query.side_effect = Exception("API error")
         req = stage1_understand_query("some query")
 
@@ -51,7 +51,7 @@ def test_stage2_returns_best_score_per_provider():
         {"provider": "AWS", "score": 0.91},
         {"provider": "Azure", "score": 0.78},
     ]
-    with patch("app.services.ranking_pipeline.search_sla", return_value=mock_chunks):
+    with patch("app.services.ingestion.search_sla", return_value=mock_chunks):
         scores = stage2_retrieve_chunks("test query", ["AWS", "Azure"])
 
     assert scores["AWS"] == 0.91   # best of two
@@ -59,7 +59,7 @@ def test_stage2_returns_best_score_per_provider():
 
 
 def test_stage2_returns_empty_on_failure():
-    with patch("app.services.ranking_pipeline.search_sla", side_effect=Exception("chroma down")):
+    with patch("app.services.ingestion.search_sla", side_effect=Exception("chroma down")):
         scores = stage2_retrieve_chunks("test query", ["AWS"])
     assert scores == {}
 
@@ -69,9 +69,9 @@ def test_stage2_returns_empty_on_failure():
 def _make_mock_metrics(name: str):
     m = MagicMock()
     defaults = {
-        "AWS":         (99.99, 4.0, 1.0, 60, 30, ["eu-west-1"], ["GDPR", "HIPAA"]),
-        "Azure":       (99.995, 1.0, 0.5, 15, 30, ["germanywestcentral"], ["GDPR", "HIPAA"]),
-        "GCP":         (99.95, 2.0, 1.0, 60, 25, ["europe-west3"], ["GDPR", "HIPAA"]),
+        "AWS":   (99.99,  4.0, 1.0, 60,  30, ["eu-west-1"],           ["GDPR", "HIPAA"]),
+        "Azure": (99.995, 1.0, 0.5, 15,  30, ["germanywestcentral"],   ["GDPR", "HIPAA"]),
+        "GCP":   (99.95,  2.0, 1.0, 60,  25, ["europe-west3"],         ["GDPR", "HIPAA"]),
     }
     uptime, rto, rpo, support, penalty, regions, compliance = defaults.get(
         name, (99.9, 24.0, 24.0, 60, 10, [], [])
@@ -88,13 +88,13 @@ def _make_mock_metrics(name: str):
 
 def test_pipeline_returns_all_providers():
     providers = [
-        ("id-aws", "AWS", _make_mock_metrics("AWS")),
+        ("id-aws",   "AWS",   _make_mock_metrics("AWS")),
         ("id-azure", "Azure", _make_mock_metrics("Azure")),
-        ("id-gcp", "GCP", _make_mock_metrics("GCP")),
+        ("id-gcp",   "GCP",   _make_mock_metrics("GCP")),
     ]
-    with patch("app.services.ranking_pipeline.to_english", return_value=("test query", "en")), \
-         patch("app.services.ranking_pipeline.llm_router") as mock_llm, \
-         patch("app.services.ranking_pipeline.search_sla", return_value=[]):
+    with patch("app.services.translation.to_english", return_value=("test query", "en")), \
+         patch("app.services.llm_router.llm_router") as mock_llm, \
+         patch("app.services.ingestion.search_sla", return_value=[]):
 
         mock_llm.understand_query.return_value = {}
         mock_llm.generate_explanation.return_value = "Test explanation"
@@ -106,13 +106,13 @@ def test_pipeline_returns_all_providers():
 
 def test_pipeline_ranks_are_unique_and_sequential():
     providers = [
-        ("id-aws", "AWS", _make_mock_metrics("AWS")),
+        ("id-aws",   "AWS",   _make_mock_metrics("AWS")),
         ("id-azure", "Azure", _make_mock_metrics("Azure")),
-        ("id-gcp", "GCP", _make_mock_metrics("GCP")),
+        ("id-gcp",   "GCP",   _make_mock_metrics("GCP")),
     ]
-    with patch("app.services.ranking_pipeline.to_english", return_value=("test query", "en")), \
-         patch("app.services.ranking_pipeline.llm_router") as mock_llm, \
-         patch("app.services.ranking_pipeline.search_sla", return_value=[]):
+    with patch("app.services.translation.to_english", return_value=("test query", "en")), \
+         patch("app.services.llm_router.llm_router") as mock_llm, \
+         patch("app.services.ingestion.search_sla", return_value=[]):
 
         mock_llm.understand_query.return_value = {}
         mock_llm.generate_explanation.return_value = ""
@@ -125,8 +125,8 @@ def test_pipeline_ranks_are_unique_and_sequential():
 
 def test_pipeline_empty_when_no_metrics():
     providers = [("id-aws", "AWS", None)]
-    with patch("app.services.ranking_pipeline.to_english", return_value=("test query", "en")), \
-         patch("app.services.ranking_pipeline.llm_router") as mock_llm:
+    with patch("app.services.translation.to_english", return_value=("test query", "en")), \
+         patch("app.services.llm_router.llm_router") as mock_llm:
         mock_llm.understand_query.return_value = {}
         result = run_pipeline("test query", providers)
 
@@ -135,12 +135,12 @@ def test_pipeline_empty_when_no_metrics():
 
 def test_pipeline_final_scores_in_range():
     providers = [
-        ("id-aws", "AWS", _make_mock_metrics("AWS")),
+        ("id-aws",   "AWS",   _make_mock_metrics("AWS")),
         ("id-azure", "Azure", _make_mock_metrics("Azure")),
     ]
-    with patch("app.services.ranking_pipeline.to_english", return_value=("test query", "en")), \
-         patch("app.services.ranking_pipeline.llm_router") as mock_llm, \
-         patch("app.services.ranking_pipeline.search_sla", return_value=[]):
+    with patch("app.services.translation.to_english", return_value=("test query", "en")), \
+         patch("app.services.llm_router.llm_router") as mock_llm, \
+         patch("app.services.ingestion.search_sla", return_value=[]):
 
         mock_llm.understand_query.return_value = {}
         mock_llm.generate_explanation.return_value = ""
