@@ -181,7 +181,9 @@ def stage6_explain(
             {
                 "rank": r.rank_position,
                 "name": r.provider_name,
+                "final_score": round(r.final_score, 1),
                 "topsis_score": round(r.topsis_score, 3),
+                "semantic_score": round(r.cosine_score, 3),
                 "uptime": r.sla_uptime_pct,
                 "rto_hours": r.sla_rto_hours,
                 "compliance": r.compliance_tags,
@@ -287,7 +289,8 @@ def run_pipeline(
     # Stage 6 — single explanation for full ranking
     explanation = stage6_explain(english_query, results[:3], lang)
     if explanation:
-        results[0].explanation = explanation
+        for r in results[:3]:
+            r.explanation = explanation
 
     return PipelineResult(
         requirements=req,

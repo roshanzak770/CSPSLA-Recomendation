@@ -41,11 +41,22 @@ def _feature_vector(record: dict) -> List[float]:
 def predict(records: List[dict]) -> List[float]:
     """
     Re-rank using XGBoost if a trained model exists.
-    Falls back to TOPSIS score if no model is available yet (cold start).
+    Falls back to a query-aware weighted score in cold start.
     """
     if not MODEL_PATH.exists():
-        # Cold start: return TOPSIS scores directly
-        return [r.get("topsis_score", 0.0) for r in records]
+        # Query-aware cold start: blend TOPSIS with requirement-match signals
+        scores = []
+        for r in records:
+            uptime_ok = 1.0 if r.get("uptime_delta", 0.0) >= 0 else 0.0
+            score = (
+                0.40 * r.get("topsis_score", 0.0)
+                + 0.20 * uptime_ok
+                + 0.15 * float(r.get("rto_meets_requirement", 1))
+                + 0.15 * float(r.get("region_match", 1))
+                + 0.10 * r.get("compliance_overlap_pct", 1.0)
+            )
+            scores.append(score)
+        return scores
 
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)

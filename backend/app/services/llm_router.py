@@ -115,10 +115,11 @@ Query: {query}"""},
             {"role": "system", "content": "You are a cloud SLA analyst. Write concise, factual explanations."},
             {"role": "user",   "content": f"""User requirement: {query}
 
-Ranked providers (with SLA data):
+Ranked providers (sorted by final_score, highest = best match):
 {json.dumps(providers, indent=2)}
 
-Write 3-5 sentences explaining the ranking, citing specific SLA metrics.
+The ranking is determined by final_score (weighted combination of SLA fit, semantic relevance, and ML re-ranking).
+Write 3-5 sentences explaining WHY the top-ranked provider scored highest, referencing its specific SLA metrics (uptime, RTO, compliance). Mention where lower-ranked providers fall short.
 Respond in {lang}."""},
         ], max_tokens=400, temperature=0.3)
 
