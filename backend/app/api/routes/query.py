@@ -125,6 +125,7 @@ async def run_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
             final_score=r.final_score,
             topsis_score=r.topsis_score,
             xgb_score=r.xgb_score,
+            xgb_cold_start=r.xgb_cold_start,
             cosine_score=r.cosine_score,
             cost_usd=r.cost_usd,
             value_score=r.value_score,

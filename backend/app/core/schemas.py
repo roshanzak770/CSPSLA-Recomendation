@@ -31,6 +31,7 @@ class ProviderRanking(BaseModel):
     final_score: float
     topsis_score: Optional[float]
     xgb_score: Optional[float]
+    xgb_cold_start: bool = True
     cosine_score: Optional[float]
     cost_usd: Optional[float]
     value_score: Optional[float]

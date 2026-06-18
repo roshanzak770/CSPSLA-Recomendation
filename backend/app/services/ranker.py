@@ -38,13 +38,12 @@ def _feature_vector(record: dict) -> List[float]:
     ]
 
 
-def predict(records: List[dict]) -> List[float]:
+def predict(records: List[dict]) -> tuple[List[float], bool]:
     """
     Re-rank using XGBoost if a trained model exists.
-    Falls back to a query-aware weighted score in cold start.
+    Returns (scores, is_cold_start).
     """
     if not MODEL_PATH.exists():
-        # Query-aware cold start: blend TOPSIS with requirement-match signals
         scores = []
         for r in records:
             uptime_ok = 1.0 if r.get("uptime_delta", 0.0) >= 0 else 0.0
@@ -56,13 +55,13 @@ def predict(records: List[dict]) -> List[float]:
                 + 0.10 * r.get("compliance_overlap_pct", 1.0)
             )
             scores.append(score)
-        return scores
+        return scores, True
 
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
 
     X = np.array([_feature_vector(r) for r in records])
-    return model.predict(X).tolist()
+    return model.predict(X).tolist(), False
 
 
 def retrain(training_data: List[dict]) -> bool:

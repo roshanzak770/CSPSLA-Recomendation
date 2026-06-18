@@ -269,15 +269,16 @@ export default function Recommend() {
                     {r.topsis_score != null && (
                       <ScoreBar score={r.topsis_score * 100} max={100} label="TOPSIS (SLA metrics)" />
                     )}
-                    {r.xgb_score != null && r.xgb_score !== r.topsis_score && (
-                      <ScoreBar score={r.xgb_score * 100} max={100} label="XGBoost (learned)" />
-                    )}
-                    {r.xgb_score != null && r.xgb_score === r.topsis_score && (
+                    {r.xgb_cold_start ? (
                       <div className="text-[10px] text-slate-600 italic pl-0.5">
-                        XGBoost = TOPSIS (cold start — needs 100 feedback signals to train)
+                        XGBoost cold start — needs 100 feedback signals to train
                       </div>
+                    ) : (
+                      r.xgb_score != null && (
+                        <ScoreBar score={r.xgb_score * 100} max={100} label="XGBoost (learned)" />
+                      )
                     )}
-                    {r.cosine_score != null && (
+                    {r.cosine_score != null && r.cosine_score > 0 && (
                       <ScoreBar score={r.cosine_score * 100} max={100} label="Semantic Match (query)" />
                     )}
                   </div>

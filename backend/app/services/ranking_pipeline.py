@@ -43,6 +43,7 @@ class ProviderResult:
     topsis_score: float
     xgb_score: float
     cosine_score: float
+    xgb_cold_start: bool
     cost_usd: Optional[float]
     value_score: Optional[float]
     explanation: Optional[str]
@@ -92,24 +93,21 @@ def stage1_understand_query(english_query: str) -> QueryRequirements:
 # ---------------------------------------------------------------------------
 
 def stage2_retrieve_chunks(english_query: str, provider_names: List[str]) -> dict[str, float]:
-    """Returns {provider_name: best_cosine_score}, case-insensitive match on provider."""
+    """Returns {provider_name: best_cosine_score}, one search per provider to avoid score starvation."""
     from app.services.ingestion import search_sla
-    try:
-        chunks = search_sla(english_query, top_k=5 * max(len(provider_names), 1))
-    except Exception as e:
-        logger.warning("ChromaDB retrieval failed: %s", e)
-        return {}
-
-    # Build a lowercase → original-case lookup so Azure matches "azure", "AZURE", etc.
-    name_map = {n.lower(): n for n in provider_names}
-
     scores: dict[str, float] = {}
-    for chunk in chunks:
-        raw_name = chunk.get("provider", "")
-        canonical = name_map.get(raw_name.lower(), raw_name)
-        score = chunk.get("score", 0.0)
-        if canonical not in scores or score > scores[canonical]:
-            scores[canonical] = score
+    for name in provider_names:
+        try:
+            # Search with this provider's exact stored name variants (case-insensitive)
+            chunks = search_sla(english_query, top_k=5)
+            for chunk in chunks:
+                stored = chunk.get("provider", "")
+                if stored.lower() == name.lower():
+                    score = chunk.get("score", 0.0)
+                    if name not in scores or score > scores[name]:
+                        scores[name] = score
+        except Exception as e:
+            logger.warning("ChromaDB retrieval failed for %s: %s", name, e)
     return scores
 
 
@@ -272,11 +270,11 @@ def run_pipeline(
         _build_xgb_record(tr, cosine_scores, req, metrics_map.get(tr.provider_id))
         for tr in topsis_results
     ]
-    xgb_scores = predict(xgb_records)
+    xgb_scores, xgb_cold_start = predict(xgb_records)
 
     # Compute final scores and sort
     scored = []
-    for tr, xgb_s, xgb_rec in zip(topsis_results, xgb_scores, xgb_records):
+    for tr, xgb_s in zip(topsis_results, xgb_scores):
         cosine_s = cosine_scores.get(tr.provider_name, 0.0)
         final = (0.50 * tr.topsis_score) + (0.20 * cosine_s) + (0.30 * xgb_s)
         scored.append((tr, xgb_s, cosine_s, final))
@@ -297,6 +295,7 @@ def run_pipeline(
             topsis_score=tr.topsis_score,
             xgb_score=xgb_s,
             cosine_score=cosine_s,
+            xgb_cold_start=xgb_cold_start,
             cost_usd=None,
             value_score=None,
             explanation=None,
