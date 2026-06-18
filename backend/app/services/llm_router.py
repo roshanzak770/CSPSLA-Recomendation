@@ -110,18 +110,18 @@ Query: {query}"""},
         ], max_tokens=300, temperature=0)
         return self._parse_json(raw)
 
-    def generate_explanation(self, query: str, providers: list, lang: str = "English") -> str:
+    def generate_explanation(self, query: str, provider: dict, all_providers: list, lang: str = "English") -> str:
         return _chat([
             {"role": "system", "content": "You are a cloud SLA analyst. Write concise, factual explanations."},
             {"role": "user",   "content": f"""User requirement: {query}
 
-Ranked providers (sorted by final_score, highest = best match):
-{json.dumps(providers, indent=2)}
+All ranked providers (for context):
+{json.dumps(all_providers, indent=2)}
 
-The ranking is determined by final_score (weighted combination of SLA fit, semantic relevance, and ML re-ranking).
-Write 3-5 sentences explaining WHY the top-ranked provider scored highest, referencing its specific SLA metrics (uptime, RTO, compliance). Mention where lower-ranked providers fall short.
+Now write 2-3 sentences specifically about why "{provider['name']}" ranked #{provider['rank']} (final_score={provider['final_score']}).
+Cite its specific SLA metrics (uptime, RTO, compliance). Compare briefly to the others where relevant.
 Respond in {lang}."""},
-        ], max_tokens=400, temperature=0.3)
+        ], max_tokens=200, temperature=0.3)
 
     def describe_sla_change(self, old_chunk: str, new_chunk: str) -> dict:
         raw = _chat([

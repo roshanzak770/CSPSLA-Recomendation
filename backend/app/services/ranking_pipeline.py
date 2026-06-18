@@ -92,21 +92,24 @@ def stage1_understand_query(english_query: str) -> QueryRequirements:
 # ---------------------------------------------------------------------------
 
 def stage2_retrieve_chunks(english_query: str, provider_names: List[str]) -> dict[str, float]:
-    """Returns {provider_name: best_cosine_score}."""
+    """Returns {provider_name: best_cosine_score}, case-insensitive match on provider."""
     from app.services.ingestion import search_sla
     try:
-        chunks = search_sla(english_query, top_k=5 * len(provider_names))
+        chunks = search_sla(english_query, top_k=5 * max(len(provider_names), 1))
     except Exception as e:
         logger.warning("ChromaDB retrieval failed: %s", e)
         return {}
 
-    # Keep best score per provider
+    # Build a lowercase → original-case lookup so Azure matches "azure", "AZURE", etc.
+    name_map = {n.lower(): n for n in provider_names}
+
     scores: dict[str, float] = {}
     for chunk in chunks:
-        name = chunk.get("provider", "")
+        raw_name = chunk.get("provider", "")
+        canonical = name_map.get(raw_name.lower(), raw_name)
         score = chunk.get("score", 0.0)
-        if name not in scores or score > scores[name]:
-            scores[name] = score
+        if canonical not in scores or score > scores[canonical]:
+            scores[canonical] = score
     return scores
 
 
@@ -167,18 +170,35 @@ def _build_xgb_record(
 
 
 # ---------------------------------------------------------------------------
-# Stage 6 — LLM Explanation
+# Stage 6 — LLM Explanation (one per provider)
 # ---------------------------------------------------------------------------
 
 def stage6_explain(
     english_query: str,
     top_results: List[ProviderResult],
     lang: str = "English",
-) -> str:
+) -> List[str]:
+    """Returns a list of explanations, one per result in top_results."""
     from app.services.llm_router import llm_router
-    try:
-        provider_data = [
-            {
+    explanations = []
+    all_provider_data = [
+        {
+            "rank": r.rank_position,
+            "name": r.provider_name,
+            "final_score": round(r.final_score, 1),
+            "topsis_score": round(r.topsis_score, 3),
+            "semantic_score": round(r.cosine_score, 3),
+            "uptime": r.sla_uptime_pct,
+            "rto_hours": r.sla_rto_hours,
+            "compliance": r.compliance_tags,
+            "meets_uptime": r.meets_uptime,
+            "meets_rto": r.meets_rto,
+        }
+        for r in top_results
+    ]
+    for r in top_results:
+        try:
+            this_provider = {
                 "rank": r.rank_position,
                 "name": r.provider_name,
                 "final_score": round(r.final_score, 1),
@@ -190,12 +210,14 @@ def stage6_explain(
                 "meets_uptime": r.meets_uptime,
                 "meets_rto": r.meets_rto,
             }
-            for r in top_results
-        ]
-        return llm_router.generate_explanation(english_query, provider_data, lang)
-    except Exception as e:
-        logger.warning("LLM explanation failed: %s", e)
-        return ""
+            explanation = llm_router.generate_explanation(
+                english_query, this_provider, all_provider_data, lang
+            )
+            explanations.append(explanation)
+        except Exception as e:
+            logger.warning("LLM explanation failed for %s: %s", r.provider_name, e)
+            explanations.append("")
+    return explanations
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +308,11 @@ def run_pipeline(
             sla_rto_hours=m.rto_hours if m else None,
         ))
 
-    # Stage 6 — single explanation for full ranking
-    explanation = stage6_explain(english_query, results[:3], lang)
-    if explanation:
-        for r in results[:3]:
-            r.explanation = explanation
+    # Stage 6 — individual explanation per provider
+    explanations = stage6_explain(english_query, results[:3], lang)
+    for r, expl in zip(results[:3], explanations):
+        if expl:
+            r.explanation = expl
 
     return PipelineResult(
         requirements=req,
