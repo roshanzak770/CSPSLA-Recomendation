@@ -2,15 +2,42 @@ const BASE = '/api';
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_KEY || 'dev-admin-key';
 
 async function request(path, options = {}) {
+  // Spread `options` FIRST so we can layer headers afterwards. Otherwise the
+  // spread order clobbers Content-Type, which produces a 422 with
+  // "Input should be a valid dictionary or object to extract fields from"
+  // because FastAPI can't parse the body as JSON without the header.
+  // Skip Content-Type for FormData (browser sets multipart boundary itself).
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const baseHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
+    headers: { ...baseHeaders, ...(options.headers || {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// FastAPI returns `detail` as a string for HTTPException(...) but as an array
+// of `{loc, msg, type, input}` objects for Pydantic 422 validation errors.
+// Without flattening that into readable text, the UI shows "[object Object]".
+function formatErrorDetail(detail) {
+  if (!detail) return null;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map(d => {
+        if (typeof d === 'string') return d;
+        const field = Array.isArray(d.loc) ? d.loc.filter(p => p !== 'body').join('.') : '';
+        return field ? `${field}: ${d.msg}` : d.msg;
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  if (typeof detail === 'object') return detail.msg || JSON.stringify(detail);
+  return String(detail);
 }
 
 const get = (path) => request(path);

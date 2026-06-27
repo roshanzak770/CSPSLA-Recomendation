@@ -865,12 +865,17 @@ def _ibm_all_regions() -> list[dict]:
 
 # ── Unified fetch-all helper ─────────────────────────────────────────────────
 
+# Provider keys here MUST match the canonical provider names used elsewhere
+# (see _PROVIDER_ALIASES in admin.py). Older versions used "Oracle Cloud" and
+# "IBM Cloud" which caused the upsert in routes/pricing.py to *create* new
+# duplicate Provider rows on every refresh, splitting pricing data away from
+# the SLA metrics that live on the canonical rows.
 PROVIDER_FETCHERS = {
-    "AWS": lambda: fetch_aws_pricing(),
-    "Azure": lambda: fetch_azure_all_services(),
-    "GCP": lambda: fetch_gcp_pricing(),
-    "Oracle Cloud": lambda: fetch_oracle_pricing(),
-    "IBM Cloud": lambda: fetch_ibm_pricing(),
+    "AWS":    lambda: fetch_aws_pricing(),
+    "Azure":  lambda: fetch_azure_all_services(),
+    "GCP":    lambda: fetch_gcp_pricing(),
+    "Oracle": lambda: fetch_oracle_pricing(),
+    "IBM":    lambda: fetch_ibm_pricing(),
 }
 
 

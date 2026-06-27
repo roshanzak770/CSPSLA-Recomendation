@@ -1,0 +1,43 @@
+# Force LF line endings on checkout for every text file in the repo.
+#
+# This matters because all our containers run Linux, but Windows Git can
+# silently rewrite files to CRLF on checkout (its default for any .sh, .py,
+# Dockerfile, etc). That produces shell errors like:
+#   /bin/bash^M: bad interpreter: No such file or directory
+# inside the container — incredibly confusing because the file *looks* fine
+# in the editor.
+#
+# `text=auto eol=lf` says "auto-detect text vs binary, and for text use LF
+# regardless of host OS." This is the standard hardening for repos that
+# build Docker images on Linux but get cloned by mixed-OS contributors.
+
+*               text=auto eol=lf
+
+# Be explicit about scripts and config that *must* stay LF — these files
+# are the ones that break loudest if CRLF sneaks in.
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.conf          text eol=lf
+*.env           text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+
+# Explicit binary so Git doesn't try to diff/munge them.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.docx          binary
+*.xlsx          binary
+*.zip           binary
+*.gz            binary
+*.tar           binary
+*.tgz           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.eot           binary

@@ -78,6 +78,13 @@ function SummaryPanel({ summary, metrics, onClose }) {
   );
 }
 
+// Max PDF size users can upload through the browser. The backend enforces
+// the same ceiling — keep both numbers in sync.
+// 50 MB allows multi-language master SLAs (e.g. Microsoft Online Services SLA
+// in all languages, which can hit ~30 MB) without rejecting legitimate uploads.
+const MAX_PDF_MB = 50;
+const MAX_PDF_BYTES = MAX_PDF_MB * 1024 * 1024;
+
 export default function AddSLADocs() {
   const [section, setSection] = useState('upload');
   const [provider, setProvider] = useState('');
@@ -146,8 +153,14 @@ export default function AddSLADocs() {
     if (!provider || selectedUrls.length === 0) return;
     const statuses = {};
     for (const url of selectedUrls) {
+      // Defensive: skip empty/whitespace entries instead of sending them and
+      // collecting a 422 — backend requires a non-empty URL.
+      if (!url || !url.trim()) {
+        statuses[url || '(empty)'] = 'skipped — empty URL';
+        continue;
+      }
       try {
-        await api.ingestURL(provider, url);
+        await api.ingestURL(provider, url.trim());
         statuses[url] = 'ok';
       } catch (e) {
         statuses[url] = e.message;
@@ -182,11 +195,21 @@ export default function AddSLADocs() {
     }
   }
 
+  function tryUploadPDF(file) {
+    if (!provider) { toast.error('Select a provider first'); return; }
+    if (!file) return;
+    if (file.size > MAX_PDF_BYTES) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+      toast.error(`PDF is ${sizeMB} MB — max allowed is ${MAX_PDF_MB} MB.`);
+      return;
+    }
+    uploadPDF.mutate({ prov: provider, file });
+  }
+
   function handleDrop(e) {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && provider) uploadPDF.mutate({ prov: provider, file });
-    else if (!provider) toast.error('Select a provider first');
+    tryUploadPDF(file);
   }
 
   const canSearch = provider || searchQuery.trim();
@@ -256,21 +279,36 @@ export default function AddSLADocs() {
                     className="border-2 border-dashed border-surface-border rounded-xl p-12 text-center cursor-pointer hover:border-blue-500/40 transition-colors group">
                     <Upload className="w-8 h-8 text-slate-600 mx-auto mb-3 group-hover:text-blue-400 transition-colors" />
                     <p className="text-slate-400 text-sm">Drag & drop PDF here, or <span className="text-blue-400">click to browse</span></p>
-                    <p className="text-slate-600 text-xs mt-1">PDF files only</p>
+                    <p className="text-slate-600 text-xs mt-1">PDF files only · Max {MAX_PDF_MB} MB</p>
                     <input ref={fileRef} type="file" accept=".pdf" hidden
-                      onChange={e => { const f = e.target.files?.[0]; if (f && provider) uploadPDF.mutate({ prov: provider, file: f }); else if (!provider) toast.error('Select a provider first'); }} />
+                      onChange={e => { const f = e.target.files?.[0]; tryUploadPDF(f); e.target.value = ''; }} />
                     {uploadPDF.isPending && <Spinner className="mx-auto mt-3" />}
                   </div>
                 )}
 
                 {uploadMode === 'url' && (
-                  <div className="flex gap-2">
-                    <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
-                      placeholder="https://docs.provider.com/sla.html"
-                      className="flex-1 px-4 py-2.5 rounded-lg bg-surface-card border border-surface-border text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/50 text-sm" />
-                    <Button onClick={() => provider && urlInput && ingestURL.mutate({ prov: provider, url: urlInput })} disabled={!provider || !urlInput || ingestURL.isPending}>
-                      {ingestURL.isPending ? <Spinner size="sm" /> : 'Ingest'}
-                    </Button>
+                  <div className="space-y-2">
+                    {!provider && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs w-fit">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        Select a provider above before ingesting a URL.
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <input value={urlInput} onChange={e => setUrlInput(e.target.value)}
+                        placeholder="https://docs.provider.com/sla.html"
+                        className="flex-1 px-4 py-2.5 rounded-lg bg-surface-card border border-surface-border text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/50 text-sm" />
+                      <Button
+                        onClick={() => {
+                          const trimmed = urlInput.trim();
+                          if (!provider) { toast.error('Select a provider first'); return; }
+                          if (!trimmed)  { toast.error('Paste a URL first'); return; }
+                          ingestURL.mutate({ prov: provider, url: trimmed });
+                        }}
+                        disabled={ingestURL.isPending}>
+                        {ingestURL.isPending ? <Spinner size="sm" /> : 'Ingest'}
+                      </Button>
+                    </div>
                   </div>
                 )}
 

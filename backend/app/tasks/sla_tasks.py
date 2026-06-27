@@ -275,7 +275,7 @@ def discover_and_ingest_new_slas():
                     ))
 
                 try:
-                    m = llm_router.extract_sla_metrics(full_text[:3000])
+                    m = llm_router.extract_sla_metrics(full_text[:30000])
                     session.add(SLAMetrics(
                         provider_id=provider.id, document_id=doc_id,
                         uptime_sla_pct=m.get("uptime_sla_pct"),

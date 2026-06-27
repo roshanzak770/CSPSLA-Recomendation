@@ -39,7 +39,9 @@ langdetect==1.0.9
 requests==2.31.0
 
 # Web search agent (zero-cost DuckDuckGo search, no API key required)
-duckduckgo-search==6.2.13
+# Note: `duckduckgo-search` was renamed to `ddgs` in 2025; the new package
+# uses rotating impersonation and handles 202-ratelimit responses far better.
+ddgs>=9.0.0
 beautifulsoup4==4.12.3
 
 # Testing

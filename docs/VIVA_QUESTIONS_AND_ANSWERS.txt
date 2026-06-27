@@ -1,0 +1,1073 @@
+================================================================================
+        MTech VIVA EVALUATION DOCUMENT
+        CloudSLA Recommender Project
+        NLP-Based Cloud Service Provider Recommendation System
+================================================================================
+
+Evaluator Role: MTech Project Examiner / External Evaluator
+Student Project: CloudSLA Recommender
+Domain: Cloud Computing, NLP, Machine Learning, Multi-Criteria Decision Making
+Date: June 2026
+
+================================================================================
+SECTION 1: PROJECT OVERVIEW AND MOTIVATION
+================================================================================
+
+Q1.1: What is the problem your project solves?
+------------------------------------------------------------------------------
+Expected Answer:
+Choosing a cloud service provider requires reading dense, technical SLA
+(Service Level Agreement) documents that are 20-50 page PDFs written in
+legal/technical language. No existing tool compares providers based on natural
+language requirements. Users cannot easily map their needs (uptime, region,
+compliance) to SLA clauses. This system lets users describe their needs in
+plain language and returns ranked CSP recommendations with scores, cost
+estimates, and clause-level explanations - all sourced from actual SLA documents.
+
+Key Points to Evaluate:
+- Does the student understand the real-world pain point?
+- Can they articulate why existing solutions are inadequate?
+
+Follow-up: "How is this different from a cloud comparison website like G2?"
+
+
+Q1.2: Who is the target user of this system?
+------------------------------------------------------------------------------
+Expected Answer:
+- Cloud architects evaluating providers for enterprise deployments
+- CTOs/IT managers making procurement decisions
+- Compliance officers verifying regulatory requirements (HIPAA, GDPR)
+- Small/medium businesses without dedicated cloud expertise
+- Consultants advising clients on cloud migration
+
+Follow-up: "How would you validate that your system actually helps users?"
+
+
+Q1.3: What are SLA documents and why are they important?
+------------------------------------------------------------------------------
+Expected Answer:
+SLA documents are legally binding contracts specifying:
+- Guaranteed uptime percentages (e.g., 99.99%)
+- Recovery Time Objectives (RTO) - how quickly service is restored
+- Recovery Point Objectives (RPO) - maximum data loss window
+- Service credits/penalties when guarantees are breached
+- Regional availability and compliance certifications
+
+Important because they define contractual obligations protecting businesses
+from service failures. Violations entitle customers to financial credits.
+
+Follow-up: "Give an example of an SLA breach and its financial impact."
+
+
+Q1.4: How many cloud providers does your system support and why?
+------------------------------------------------------------------------------
+Expected Answer:
+Five providers: AWS, Azure, GCP, Oracle Cloud, and IBM Cloud.
+- Big 3: AWS (~32%), Azure (~23%), GCP (~11% market share)
+- Oracle: Strong in enterprise databases
+- IBM: Hybrid cloud focus
+
+Together >75% of global cloud market. Architecture is extensible - adding a
+new provider requires only ingesting their SLA document.
+
+Follow-up: "What about Alibaba Cloud, the 4th largest globally?"
+
+
+Q1.5: What makes this suitable for an MTech thesis?
+------------------------------------------------------------------------------
+Expected Answer:
+Combines multiple advanced CS domains:
+1. NLP/NLU - query understanding and structured extraction
+2. Information Retrieval - RAG over domain-specific documents
+3. Multi-Criteria Decision Making - TOPSIS mathematical framework
+4. Machine Learning - XGBoost Learning-to-Rank with feedback loop
+5. Distributed Systems - Celery task queues, Docker orchestration
+6. Software Engineering - Production-grade 6-stage pipeline
+
+Creates an adaptive system that improves with user feedback.
+
+
+Q1.6: What is the novel contribution of your work?
+------------------------------------------------------------------------------
+Expected Answer:
+The 6-stage hybrid ranking pipeline combining:
+1. LLM-based query understanding
+2. Semantic vector retrieval over SLA documents
+3. LLM-based metrics extraction
+4. TOPSIS multi-criteria scoring (classical MCDM)
+5. XGBoost learning-to-rank (ML personalization)
+6. LLM-generated explanations
+
+No existing system combines RAG + TOPSIS + Learning-to-Rank + LLM explanations
+for cloud SLA comparison. The feedback loop is also novel in this domain.
+
+Follow-up: "Plan to publish? Which conference/journal?"
+
+
+Q1.7: What existing research did you study?
+------------------------------------------------------------------------------
+Expected Answer:
+- Hwang and Yoon (1981) - original TOPSIS paper
+- Lewis et al. (2020) - "Retrieval-Augmented Generation for Knowledge-Intensive NLP"
+- Burges (2010) - "From RankNet to LambdaRank to LambdaMART"
+- Papers on cloud selection using AHP, ELECTRE, PROMETHEE
+- Tools: CloudHarmony, RightScale - none use NLP on SLA documents
+
+Key Gap: All prior work uses manually curated feature matrices. None
+automatically extract metrics from SLA documents using NLP.
+
+
+================================================================================
+SECTION 2: SYSTEM ARCHITECTURE AND DESIGN DECISIONS
+================================================================================
+
+Q2.1: Explain your system architecture with all components.
+------------------------------------------------------------------------------
+Expected Answer:
+Microservices architecture via Docker Compose:
+- Frontend: React 18 + Vite + Tailwind CSS (served via Nginx)
+- Backend: FastAPI (async Python) - REST API
+- Vector Store: ChromaDB (cosine similarity search)
+- Database: PostgreSQL 15 (structured data)
+- Cache/Queue: Redis 7 (Celery message broker)
+- Task Workers: Celery (background jobs)
+- LLM: Groq API (llama-3.1-8b-instant)
+- Embeddings: intfloat/multilingual-e5-base (local, 768-dim)
+
+Data flow:
+User query -> FastAPI -> Language Detection -> LLM Query Understanding ->
+ChromaDB Retrieval -> TOPSIS Scoring -> XGBoost Re-ranking ->
+LLM Explanation -> Response
+
+
+Q2.2: Why FastAPI over Flask or Django?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Async support - Native async/await for non-blocking I/O (critical for LLM calls)
+2. Type safety - Pydantic models for validation and auto-documentation
+3. Performance - 3-5x faster than Flask for I/O-bound workloads
+4. Auto-generated Swagger docs at /docs
+5. SQLAlchemy 2.0 async compatibility
+
+Django too heavy (unused ORM, admin, templating). Flask lacks native async.
+
+Follow-up: "Disadvantage of async in your context?"
+Answer: Debugging is harder, stack traces less readable, CPU-bound operations
+(embedding computation) still block the event loop.
+
+
+Q2.3: Why ChromaDB instead of Pinecone, Weaviate, or FAISS?
+------------------------------------------------------------------------------
+Expected Answer:
+- ChromaDB: Open-source, self-hosted, persistent, $0 cost, metadata filtering
+- Pinecone: Paid ($70/month+), vendor lock-in
+- Weaviate: More complex, heavier resources
+- FAISS: In-memory only, no metadata filtering, no persistence
+
+ChromaDB fits $0 budget with all needed features.
+
+Follow-up: "Scalability limit?"
+Answer: ChromaDB scales to millions of vectors with HNSW index but gets slower.
+For >10M vectors, would consider Milvus or Qdrant.
+
+
+Q2.4: Why PostgreSQL instead of MongoDB?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Structured relational data with foreign key relationships
+2. JSONB support for semi-structured data (parsed requirements)
+3. ARRAY columns for regions[] and compliance[]
+4. ACID compliance - critical for feedback data integrity
+5. SQLAlchemy 2.0 async support
+
+Data is relational (queries -> rankings -> feedback -> providers). Known schema
+benefits from referential integrity.
+
+
+Q2.5: Why Celery + Redis?
+------------------------------------------------------------------------------
+Expected Answer:
+Celery provides:
+- Scheduled tasks (Celery Beat): pricing daily, SLA weekly, retraining weekly
+- Async background processing: ingestion takes 1-2 min, cannot block API
+- Retry logic for failed external API calls
+- Task monitoring
+
+Redis: Lightweight (128MB), simple broker, already needed for caching.
+
+Alternative asyncio.create_task() cannot persist or schedule.
+
+
+Q2.6: Why Groq API instead of local LLMs or OpenAI?
+------------------------------------------------------------------------------
+Expected Answer:
+- Groq: Free tier (14,400 req/day), ~200ms latency, llama-3.1-8b-instant
+- OpenAI: Paid, defeats $0 cost goal
+- Local LLMs: Need GPU (8GB+ VRAM), 16GB+ RAM; target is 4-8GB
+- HuggingFace API: Slower, lower rate limits
+
+Implementation includes fallback: primary (llama-3.1-8b-instant) -> fallback
+(llama-3.2-3b-preview) if rate-limited.
+
+Follow-up: "What if Groq removes free tier?"
+Answer: System designed for easy provider swap. Could switch to Ollama (local),
+Together.ai, or any OpenAI-compatible API with one config change.
+
+
+Q2.7: Docker Compose setup?
+------------------------------------------------------------------------------
+Expected Answer:
+7 services: api, frontend, postgres, redis, chromadb, celery_worker, celery_beat
+
+Benefits: reproducibility, isolation, orchestration (depends_on startup order),
+portability across OS, volume persistence for data survival.
+
+
+Q2.8: How do pipeline stages communicate?
+------------------------------------------------------------------------------
+Expected Answer:
+Synchronous within single request - all 6 stages execute sequentially in
+run_pipeline() function. Communication via in-memory Python objects (dataclasses
+and dictionaries). No IPC, no message passing - single function call chain.
+
+Follow-up: "Bottleneck stage?"
+Answer: LLM API calls (Stages 1 and 6), each ~200-500ms. TOPSIS and XGBoost
+are <5ms locally. Total pipeline: ~2-4 seconds.
+
+
+================================================================================
+SECTION 3: NLP AND RAG PIPELINE
+================================================================================
+
+Q3.1: What is RAG and how does your system implement it?
+------------------------------------------------------------------------------
+Expected Answer:
+RAG = Retrieval-Augmented Generation:
+1. Retrieval: Semantic search finds relevant SLA chunks from ChromaDB
+2. Augmentation: Retrieved text injected into LLM prompt as context
+3. Generation: LLM generates response grounded in actual documents
+
+Prevents hallucination by grounding LLM in real SLA text.
+
+Follow-up: "Does RAG completely eliminate hallucination?"
+Answer: No. LLM can still misinterpret context or add unsupported claims.
+Mitigation: temperature=0, strict JSON schema, source_clause extraction.
+
+
+Q3.2: Why intfloat/multilingual-e5-base embedding model?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Multilingual: 100+ languages supported
+2. Cross-lingual retrieval: German query finds English documents
+3. Size: 278MB, runs on CPU without GPU
+4. Quality: Strong MTEB benchmark performance
+5. 768-dimensional vectors: good expressiveness/cost balance
+6. Prefix protocol: "query: " and "passage: " for asymmetric retrieval
+
+Rejected all-MiniLM-L6-v2: English-only, 384-dim, lower quality.
+
+Follow-up: "Why the prefix convention?"
+Answer: E5 trained with asymmetric contrastive learning. Query and passage
+have different distributions. Prefix improves accuracy 5-10%. In code:
+ingestion uses "passage: " prefix, search uses "query: " prefix.
+
+
+Q3.3: Chunking strategy - why chunk_size=500, overlap=50?
+------------------------------------------------------------------------------
+Expected Answer:
+RecursiveCharacterTextSplitter with separators: paragraph, line, period, space.
+
+chunk_size=500:
+- 500 chars ~ 3-4 sentences ~ one complete SLA clause
+- Too small (100): loses context, split mid-sentence
+- Too large (2000): dilutes embedding, harder to match specific needs
+
+chunk_overlap=50: ensures continuity at boundaries.
+
+Separator hierarchy: preserves logical structure by trying paragraph breaks first.
+
+Follow-up: "800-char clause?"
+Answer: Split into 2 overlapping chunks. Both indexed. Top-5 retrieval means
+adjacent chunks may both appear in results.
+
+
+Q3.4: How does multilingual support work?
+------------------------------------------------------------------------------
+Expected Answer:
+1. langdetect identifies input language
+2. NO translation needed - multilingual-e5-base handles all languages natively
+3. Cross-lingual retrieval: Arabic query embedded directly, finds English chunks
+4. LLM instructed to respond in detected language
+
+Originally planned LibreTranslate but found multilingual embeddings make
+translation unnecessary for retrieval.
+
+
+Q3.5: How does LLM extract structured data from unstructured SLA text?
+------------------------------------------------------------------------------
+Expected Answer:
+LLM Router sends structured prompts to Groq API:
+- System prompt: "You are an SLA data extractor. Return ONLY valid JSON"
+- User prompt: SLA text (truncated 2000 chars) + JSON schema template
+- Temperature=0 for deterministic output
+- _parse_json() handles: markdown blocks, regex JSON extraction
+
+Output schema: uptime_sla_pct, rto_hours, rpo_hours, support_response_min,
+penalty_credit_pct, regions[], compliance[], source_clause
+
+Failure handling: Multiple parsing fallbacks. On total failure, logs error,
+returns defaults, pipeline continues with available data.
+
+
+Q3.6: Difference between the two LLM tasks?
+------------------------------------------------------------------------------
+Expected Answer:
+Extraction (understand_query, extract_sla_metrics):
+- Temperature = 0 (deterministic)
+- Output = strict JSON
+- No creativity needed
+
+Generation (generate_explanation):
+- Temperature = 0.3 (slight creativity)
+- Output = natural language (2-3 sentences)
+- Comparative reasoning, cites metrics
+
+Both use same Groq model but different prompting strategies.
+
+
+Q3.7: How does ChromaDB semantic search work?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Query prefixed "query: ", encoded to 768-dim vector
+2. HNSW approximate nearest neighbor search
+3. Cosine distance metric (configured hnsw:space="cosine")
+4. Metadata WHERE filter restricts to specific providers
+5. Returns top-k documents + distances
+6. Score = 1 - distance (converts to cosine similarity)
+
+
+Q3.8: End-to-end ingestion pipeline?
+------------------------------------------------------------------------------
+Expected Answer:
+PDF -> PyMuPDF text extraction per page -> RecursiveCharacterTextSplitter
+(500/50) -> "passage: " prefix -> multilingual-e5-base encoding (batch=32) ->
+ChromaDB upsert with metadata (provider, doc_id, page, chunk_index) ->
+SHA256 hash for change detection -> LLM metrics extraction -> PostgreSQL storage
+
+Also supports URL ingestion and raw text paste.
+
+
+Q3.9: Web search agent for SLA discovery?
+------------------------------------------------------------------------------
+Expected Answer:
+1. DuckDuckGo search via ddgs library (free, no API key)
+2. Canned queries per provider with site: restrictions
+3. Relevance scoring heuristic (URL patterns, title keywords, PDF extension)
+4. Fallback to curated OFFICIAL_SLA_URLS when DDG unavailable
+5. Rate limiting: 15-min cache, polite delays, exponential backoff, 3 retries
+6. Deduplication by URL across multiple queries
+
+
+================================================================================
+SECTION 4: TOPSIS ALGORITHM - MATHEMATICAL FOUNDATION
+================================================================================
+
+Q4.1: What is TOPSIS and why choose it?
+------------------------------------------------------------------------------
+Expected Answer:
+TOPSIS = Technique for Order of Preference by Similarity to Ideal Solution
+(Hwang and Yoon, 1981)
+
+Why chosen:
+1. Handles multiple conflicting criteria
+2. Mathematically rigorous, objective scores
+3. Configurable weights (user sliders)
+4. Handles BOTH benefit and cost criteria
+5. No pairwise comparisons (unlike AHP which needs n(n-1)/2)
+6. O(n*m) complexity - efficient and scalable
+
+Follow-up: "Why not AHP?"
+Answer: AHP requires pairwise comparisons impractical for automation, suffers
+rank reversal. TOPSIS uses direct numerical weights - better for automated systems.
+
+
+Q4.2: Walk through TOPSIS step by step with formulas.
+------------------------------------------------------------------------------
+Expected Answer:
+
+Step 1 - Decision Matrix:
+X = [n_providers x m_criteria] where x_ij = value of provider i on criterion j
+
+Step 2 - Vector Normalization:
+r_ij = x_ij / sqrt( sum of x_kj^2 for all providers k )
+
+Step 3 - Weighted Normalized Matrix:
+v_ij = w_j * r_ij
+where w_j is the weight for criterion j (all weights sum to 1.0)
+
+Step 4 - Ideal Best (A+) and Ideal Worst (A-):
+For benefit criteria: A+_j = max(v_ij across all i), A-_j = min(v_ij)
+For cost criteria:    A+_j = min(v_ij across all i), A-_j = max(v_ij)
+
+Step 5 - Euclidean Distance from Ideal:
+D+_i = sqrt( sum of (v_ij - A+_j)^2 for all criteria j )
+D-_i = sqrt( sum of (v_ij - A-_j)^2 for all criteria j )
+
+Step 6 - Relative Closeness Score:
+C_i = D-_i / (D+_i + D-_i)
+Score ranges from 0 to 1. Higher = closer to ideal solution.
+Rank by descending C_i.
+
+
+Q4.3: What are your TOPSIS criteria and their types?
+------------------------------------------------------------------------------
+Expected Answer:
+
+Criterion               Weight   Type
+---------               ------   ----
+uptime_sla_pct          0.30     Benefit (higher = better)
+rto_hours               0.20     Cost (lower = better)
+rpo_hours               0.15     Cost (lower = better)
+support_response_min    0.15     Cost (lower = better)
+penalty_credit_pct      0.10     Benefit (higher = better)
+region_coverage         0.10     Benefit (higher = better)
+
+Weights sum to 1.0. User-adjustable via frontend sliders.
+
+
+Q4.4: How do you handle division by zero in TOPSIS?
+------------------------------------------------------------------------------
+Expected Answer:
+Two safeguards in topsis.py:
+
+1. Normalization denominator: If sqrt(sum of squares) = 0 for any criterion
+   (all providers have same value), replace with 1e-10:
+   norms = np.where(norms == 0, 1e-10, norms)
+
+2. Relative closeness denominator: If D+ + D- = 0 (single provider case),
+   replace with 1e-10:
+   denom = np.where(denom == 0, 1e-10, denom)
+
+Ensures algorithm never crashes even in edge cases.
+
+
+Q4.5: What happens with only one provider?
+------------------------------------------------------------------------------
+Expected Answer:
+With one provider: A+ = A- (identical), D+ = D- = 0.
+Score = 0/(0+0) handled by 1e-10 guard.
+Provider gets rank=1 regardless. TOPSIS is comparative - single provider
+score is not meaningful but system still works.
+Test suite (test_single_provider_scores_one) verifies this.
+
+
+Q4.6: How do users adjust weights and maintain normalization?
+------------------------------------------------------------------------------
+Expected Answer:
+Frontend sliders (0-100) mapped to TOPSIS criteria via _map_weights():
+1. Maps slider keys to criteria keys (e.g., "uptime" -> "uptime_sla_pct")
+2. Starts from DEFAULT_WEIGHTS (all keys present)
+3. Takes max(current, slider_value) for duplicate mappings
+4. Re-normalizes: divides all values by their sum so total = 1.0
+
+Always produces valid weights regardless of user input.
+
+
+Q4.7: Is TOPSIS mathematically valid?
+------------------------------------------------------------------------------
+Expected Answer:
+Satisfies key axiomatic properties:
+1. Monotonicity: Dominating provider always ranks higher
+2. Uniqueness: Deterministic for given matrix + weights
+3. Boundary: Scores bounded [0,1]
+4. Scale independence: Normalization removes unit dependency
+
+Limitations:
+- Possible rank reversal when alternatives added/removed
+- Assumes criteria independence
+- Linear preference assumption
+
+
+SECTION 5: XGBOOST LAMBDAMART AND LEARNING-TO-RANK
+
+Q5.1: Why Learning-to-Rank on top of TOPSIS?
+------------------------------------------------------------------------------
+Expected Answer:
+1. TOPSIS is static - fixed metrics and weights
+2. User preferences are subjective and evolve over time
+3. Some factors hard to encode in TOPSIS (brand preference, hidden signals)
+4. LTR captures non-linear feature interactions
+5. Personalization: learns patterns from accumulated feedback
+
+TOPSIS = rule-based (explicit logic)
+XGBoost = learned system (implicit patterns from data)
+
+
+Q5.2: Explain XGBoost LambdaMART.
+------------------------------------------------------------------------------
+Expected Answer:
+- XGBoost: Gradient boosted decision trees, ensemble of weak learners
+  trained sequentially, each correcting errors of previous trees
+- LambdaMART: Uses NDCG as objective function for listwise ranking
+- Configuration: objective="rank:ndcg", learning_rate=0.1,
+  n_estimators=100, max_depth=6
+- Input: (query, provider) feature vectors
+- Output: relevance scores optimizing NDCG
+
+
+Q5.3: What are the 8 XGBoost features?
+------------------------------------------------------------------------------
+Expected Answer:
+For each (query, provider) pair:
+1. cosine_similarity_score - semantic relevance from vector search
+2. topsis_score - multi-criteria objective score from Stage 4
+3. uptime_delta - (actual_uptime - required_uptime); positive = meets need
+4. rto_meets_requirement - binary 0/1
+5. region_match - binary 0/1
+6. compliance_overlap_pct - fraction of required certs provider has (0.0-1.0)
+7. cost_efficiency_score - 1 - (cost / max_cost)
+8. query_category_encoded - database=0, compute=1, storage=2, network=3
+
+
+Q5.4: How does the cold-start strategy work?
+------------------------------------------------------------------------------
+Expected Answer:
+When no trained model exists (MODEL_PATH file absent):
+- predict() returns heuristic score instead of ML prediction:
+  score = 0.40*topsis + 0.20*uptime_ok + 0.15*rto_meets +
+          0.15*region_match + 0.10*compliance
+- Returns (scores, is_cold_start=True)
+- Frontend shows "AI ranking will improve with feedback" badge
+
+Model only trains after minimum 10 feedback samples accumulated.
+
+
+Q5.5: How does the feedback loop work?
+------------------------------------------------------------------------------
+Expected Answer:
+Signal types and weights:
+- clicked_provider: 0.3
+- accepted_recommendation: 1.0
+- thumbs_up: 1.5
+- thumbs_down: -1.5
+- ignored_top_result: -0.5
+
+Flow:
+User interacts -> POST /api/feedback -> Store in PostgreSQL ->
+Every 100 entries (or weekly Celery task) -> Build feature matrix ->
+Retrain XGBRanker -> Save model pickle -> Replace model in memory
+
+
+Q5.6: What is NDCG and why use it?
+------------------------------------------------------------------------------
+Expected Answer:
+NDCG = Normalized Discounted Cumulative Gain
+
+Measures ranking quality:
+1. Position matters: higher-ranked items get more weight (log discount)
+2. Relevance grading: supports multi-level relevance
+3. Normalized: comparable across queries
+
+Formula: NDCG = DCG / IDCG
+where DCG = sum( relevance_i / log2(i+1) )
+
+Ideal because best provider at position 1 matters most.
+
+
+Q5.7: How does retraining work technically?
+------------------------------------------------------------------------------
+Expected Answer:
+In ranker.py retrain():
+1. Requires minimum 10 training samples
+2. Builds feature matrix X from stored feedback records
+3. Labels y from weighted relevance scores
+4. Groups array for listwise ranking
+5. Trains XGBRanker with rank:ndcg objective
+6. Saves to models/xgb_ranker.pkl via pickle
+7. Returns True on success
+
+Triggered by: Celery weekly OR 100 new feedback entries.
+
+
+Q5.8: What is the final score formula?
+------------------------------------------------------------------------------
+Expected Answer:
+final_score = (0.50 * topsis_score) + (0.20 * cosine_similarity) + (0.30 * xgb_score)
+
+- TOPSIS (50%): Objective multi-criteria - most trustworthy
+- Cosine (20%): Semantic relevance to query
+- XGBoost (30%): Learned personalization
+
+Multiplied by 100 for display (0-100 scale).
+
+
+SECTION 6: DATABASE DESIGN AND SCHEMA
+
+Q6.1: Explain your database schema design.
+------------------------------------------------------------------------------
+Expected Answer:
+11 tables:
+- providers: Core entity (AWS, Azure, GCP, Oracle, IBM)
+- sla_documents: PDFs linked to providers, versioned with SHA256
+- sla_chunks: Text chunks with embedding_id reference
+- sla_metrics: Extracted numeric metrics per provider/document
+- users: Email, language preference, admin flag
+- queries: Search history with parsed requirements (JSONB)
+- rankings: Results per query with all scores
+- feedback: User signals (thumbs up/down, clicks)
+- sla_alerts: Detected changes with severity
+- pricing_cache: Live pricing per provider/service/region
+- alert_thresholds: User notification rules
+
+
+Q6.2: Why UUID primary keys?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Globally unique - no collision in distributed systems
+2. Client-side generation without DB roundtrip
+3. Non-sequential - harder to enumerate
+4. PostgreSQL gen_random_uuid() support
+5. Future-proof for multi-region
+
+Trade-off: 16 vs 4 bytes, slightly slower indexing. Acceptable at scale.
+
+
+Q6.3: Why separate sla_metrics from sla_chunks?
+------------------------------------------------------------------------------
+Expected Answer:
+- sla_chunks: Raw text for ChromaDB semantic search
+- sla_metrics: Structured numbers for TOPSIS
+
+Benefits:
+1. TOPSIS needs numbers not text
+2. Metrics cached after single extraction
+3. Cross-provider comparison without re-parsing
+4. Survive ChromaDB rebuild
+5. Different update frequencies
+
+
+Q6.4: How does feedback support ML retraining?
+------------------------------------------------------------------------------
+Expected Answer:
+Stores: query_id, provider_id, signal_type, weight, user_id, timestamp.
+
+Retraining:
+1. Join feedback + rankings for feature vectors
+2. Convert signal_type to relevance via SIGNAL_WEIGHTS
+3. Group by query_id for listwise ranking
+4. Build training matrix
+
+Learns: "for queries like X, users preferred provider Y over Z."
+
+
+Q6.5: Alert system schema?
+------------------------------------------------------------------------------
+Expected Answer:
+- sla_alerts: provider, change_type, old/new values, severity, timestamps
+- alert_thresholds: email, provider, metric, operator, threshold_value
+
+Flow: Detect -> Create alert -> Check thresholds -> Email if breached
+Severity: CRITICAL, HIGH, MEDIUM, LOW, POSITIVE
+
+
+SECTION 7: IMPLEMENTATION-SPECIFIC QUESTIONS
+
+Q7.1: Walk through a user query end-to-end.
+------------------------------------------------------------------------------
+Expected Answer:
+POST /api/query {"text": "I need 99.99% uptime in Germany"}:
+1. Check SLA docs exist
+2. Load providers + metrics from PostgreSQL
+3. run_pipeline():
+   a. langdetect
+   b. LLM extracts: uptime=99.99, region=Germany
+   c. ChromaDB search per provider -> cosine scores
+   d. Cached metrics (or curated fallback)
+   e. TOPSIS scoring
+   f. XGBoost re-rank (or cold-start)
+   g. LLM explanation for top 3
+4. Persist query + rankings
+5. Return JSON response
+
+
+Q7.2: Curated fallback mechanism?
+------------------------------------------------------------------------------
+Expected Answer:
+_CURATED dict has known SLA values per provider. Used when:
+- No extracted metrics in DB
+- New provider before ingestion
+- LLM extraction failed
+
+Ensures system always returns results. Values from official docs.
+
+
+Q7.3: Pricing data collection?
+------------------------------------------------------------------------------
+Expected Answer:
+5 provider fetchers:
+- Azure: Free Retail Prices API
+- AWS: Bulk JSON + curated (15 regions, multipliers)
+- GCP: Calculator JSON + curated (15 regions)
+- Oracle: Curated (14 regions)
+- IBM: Global Catalog + curated (10 regions)
+
+Live APIs + curated baseline. Regional multipliers. Daily refresh.
+
+
+Q7.4: SLA change detection?
+------------------------------------------------------------------------------
+Expected Answer:
+Weekly Celery:
+1. Re-fetch docs from URLs
+2. Re-embed chunks
+3. cosine_similarity(new, old) < 0.95 = CHANGED
+4. LLM describes change
+5. Classify severity
+6. Store alert, check thresholds, email
+
+
+Q7.5: LLM fallback mechanism?
+------------------------------------------------------------------------------
+Expected Answer:
+_chat() tries: primary -> fallback -> raise RuntimeError
+Caller catches exception, degrades gracefully (empty results not crash).
+
+
+SECTION 8: SCALABILITY, PERFORMANCE AND LIMITATIONS
+
+Q8.1: Known limitations?
+------------------------------------------------------------------------------
+Expected Answer:
+1. XGBoost cold start (mitigated by TOPSIS + heuristic)
+2. PDF parsing fragility (format changes break extraction)
+3. Groq rate limits (14,400/day, 30/min)
+4. Weekly SLA diff only (no real-time monitoring)
+5. 5 CSPs only (extensible by design)
+6. LLM extraction not 100% reliable
+7. No user authentication (admin key only)
+
+
+Q8.2: Concurrent user handling?
+------------------------------------------------------------------------------
+Expected Answer:
+- FastAPI async: concurrent via event loop
+- Uvicorn: multiple worker processes possible
+- PostgreSQL: connection pooling (SQLAlchemy)
+- ChromaDB: thread-safe HTTP client
+- Bottleneck: Groq 30 req/min shared across users
+
+Production needs: request queue, query caching, load balancing.
+
+
+Q8.3: Memory footprint?
+------------------------------------------------------------------------------
+Expected Answer:
+Total ~4.3GB:
+- multilingual-e5-base: ~300MB
+- ChromaDB: ~300MB
+- PostgreSQL: ~256MB
+- Redis: ~128MB
+- Celery workers (x2): ~512MB
+- FastAPI: ~256MB
+- Frontend (React dev): ~512MB
+
+Minimum: 4GB RAM, 4 cores, no GPU needed.
+
+
+Q8.4: How would you scale for production?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Horizontal: Multiple API instances behind load balancer
+2. Caching: Redis cache for repeated queries (same query = same result)
+3. CDN: Frontend assets via CloudFront/Cloudflare
+4. Database: Read replicas for query load
+5. Vector Store: Migrate to Milvus/Qdrant for >1M vectors
+6. LLM: Multiple API keys, request pooling, local Ollama fallback
+7. Kubernetes: Replace Docker Compose for orchestration
+
+
+Q8.5: What is the response time breakdown?
+------------------------------------------------------------------------------
+Expected Answer:
+Stage 1 (LLM Query Understanding): ~300ms (Groq API)
+Stage 2 (ChromaDB Search): ~50-100ms (local)
+Stage 3 (Metrics Lookup): ~10ms (PostgreSQL cached)
+Stage 4 (TOPSIS): ~2ms (NumPy, local)
+Stage 5 (XGBoost): ~5ms (local prediction)
+Stage 6 (LLM Explanations x3): ~900ms (3 Groq calls)
+Total: ~1.5-2.5 seconds
+
+Bottleneck: LLM API calls (80% of total time).
+
+
+SECTION 9: TESTING AND EVALUATION
+
+Q9.1: What testing have you implemented?
+------------------------------------------------------------------------------
+Expected Answer:
+Unit tests (pytest):
+- test_topsis.py: 7 tests covering TOPSIS algorithm correctness
+  - Returns all providers
+  - Ranks are unique
+  - Scores between 0 and 1
+  - Azure ranks first on default weights
+  - Empty providers returns empty
+  - Single provider works
+  - Custom weights change ranking
+- test_pipeline.py: Integration tests for ranking pipeline
+- test_api.py: API endpoint tests
+
+Testing strategy: Test the mathematical core (TOPSIS) exhaustively since it
+is deterministic and testable without external dependencies. Integration tests
+verify end-to-end pipeline with mocked LLM responses.
+
+
+Q9.2: How would you evaluate ranking quality?
+------------------------------------------------------------------------------
+Expected Answer:
+1. NDCG@k: Compare system ranking to expert human ranking
+2. User satisfaction: Track thumbs_up vs thumbs_down ratio over time
+3. Click-through rate: Which rank positions get clicked most
+4. A/B testing: Compare TOPSIS-only vs full pipeline rankings
+5. Precision@1: Is the top recommendation actually the best choice?
+
+Current limitation: No ground truth dataset exists for SLA-based cloud ranking.
+Would need to create one via expert annotation.
+
+
+Q9.3: How do you validate LLM extraction accuracy?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Manual spot-check: Compare extracted values vs. reading the SLA document
+2. Known values test: Feed a document with known metrics, verify extraction
+3. Cross-validation: Extract from same doc multiple times, check consistency
+4. source_clause field: LLM must cite the exact text it extracted from
+
+Current approach: Trust but verify. Curated fallback values provide a baseline.
+If extracted value deviates significantly from curated, flag for review.
+
+
+Q9.4: What metrics would you track in production?
+------------------------------------------------------------------------------
+Expected Answer:
+1. Response latency (p50, p95, p99)
+2. LLM API error rate
+3. Feedback ratio (positive/negative)
+4. Query volume per hour/day
+5. XGBoost model accuracy improvement over time
+6. SLA alerts generated per week
+7. Cache hit rate for pricing data
+8. ChromaDB query time distribution
+
+
+SECTION 10: CRITICAL THINKING - "WHY NOT" QUESTIONS
+
+Q10.1: Why not just use ChatGPT directly? Users could ask it about cloud SLAs.
+------------------------------------------------------------------------------
+Expected Answer:
+ChatGPT limitations for this use case:
+1. Training cutoff: Does not know latest SLA changes (ours updates weekly)
+2. Hallucination: Cannot verify if a claimed "99.99% uptime" is in the actual document
+3. No quantitative ranking: Cannot produce objective TOPSIS scores
+4. No personalization: Does not learn from user feedback
+5. No cost integration: Cannot fetch live pricing data
+6. No alerting: Cannot notify users of SLA changes
+7. Context window: Cannot process all SLA documents simultaneously
+
+Our system: grounded in actual documents, produces numerical scores,
+improves over time, integrates cost data, monitors changes.
+
+
+Q10.2: TOPSIS assumes criteria are independent. Is that valid?
+------------------------------------------------------------------------------
+Expected Answer:
+Acknowledged limitation. In reality:
+- Higher uptime often correlates with higher cost
+- Better RTO usually means better RPO (related infrastructure)
+- More regions often means better support
+
+Mitigation:
+1. Weights allow users to express relative importance
+2. XGBoost Stage 5 CAN capture non-linear interactions between features
+3. For our 5-provider comparison, the practical impact is small
+4. Future work: Use ANP (Analytic Network Process) which handles dependencies
+
+Honest answer: "Yes, this is an assumption. The XGBoost layer partially
+compensates by learning feature interactions from feedback data."
+
+
+Q10.3: Your LLM extraction could be wrong. How reliable is it?
+------------------------------------------------------------------------------
+Expected Answer:
+Known risk. Mitigation strategies:
+1. temperature=0: Deterministic, reproducible outputs
+2. Structured prompting: JSON schema constrains output format
+3. Curated fallback: If extraction seems unreasonable, fall back to known values
+4. source_clause: LLM must quote exact text it extracted from (verifiable)
+5. Human-in-the-loop: Admin can manually correct extracted metrics
+6. Multiple extraction: Could extract from same doc multiple times and take consensus
+
+Accuracy estimate: ~85-90% for uptime/RTO numeric extraction, lower for
+complex fields like regions and compliance (based on manual testing).
+
+
+Q10.4: Why not use a fine-tuned model instead of prompting?
+------------------------------------------------------------------------------
+Expected Answer:
+Fine-tuning considerations:
+- Requires labeled training data (SLA text -> structured JSON pairs)
+- We have only ~5 providers x ~5 documents = ~25 training examples
+- Fine-tuning needs hundreds to thousands of examples
+- Prompting with temperature=0 works well enough for our structured extraction
+- Fine-tuned model would need retraining when SLA format changes
+
+Prompting is the right choice here: zero-shot, works immediately, easy to
+modify prompts when requirements change, no training data needed.
+
+
+Q10.5: What if two providers have nearly identical TOPSIS scores?
+------------------------------------------------------------------------------
+Expected Answer:
+When scores are very close (e.g., 0.78 vs 0.77):
+1. The difference may not be statistically meaningful
+2. XGBoost Stage 5 can break ties using learned preferences
+3. LLM explanation (Stage 6) highlights specific differentiators
+4. Cost data can be the tiebreaker (value_score formula)
+5. Users can adjust weights to amplify criteria they care about
+
+The system presents both options with their scores and explanations,
+letting users make an informed final decision.
+
+
+Q10.6: Your system depends on free APIs. What is the business model risk?
+------------------------------------------------------------------------------
+Expected Answer:
+Dependencies and risks:
+1. Groq free tier: Could be removed. Mitigation: Ollama local fallback
+2. DuckDuckGo: Rate-limited. Mitigation: curated URL fallback
+3. Azure Pricing API: Public, stable for years. Low risk.
+4. ChromaDB: Open-source, self-hosted. No external dependency.
+5. HuggingFace models: Downloaded locally. No runtime dependency.
+
+For production deployment:
+- Budget $50-100/month for LLM API (Groq paid, or Together.ai)
+- All other components are self-hosted and free
+- Total hosting: ~$20/month on Railway/Render
+
+
+Q10.7: How do you handle bias in the system?
+------------------------------------------------------------------------------
+Expected Answer:
+Potential biases:
+1. SLA document quality: Some providers write clearer SLAs (Azure very structured)
+   - Mitigation: Curated fallback values normalize this
+2. LLM training bias: LLM may have opinions about providers
+   - Mitigation: Use LLM only for extraction, not ranking
+3. Feedback loop bias: Early users' preferences dominate
+   - Mitigation: TOPSIS maintains 50% weight regardless of feedback
+4. Pricing bias: Curated prices may be outdated
+   - Mitigation: Daily refresh from live APIs
+
+TOPSIS objectivity (50% weight) acts as a fairness anchor - no single
+provider can be favored without having objectively better SLA metrics.
+
+
+Q10.8: What would make this system fail completely?
+------------------------------------------------------------------------------
+Expected Answer:
+Critical failure scenarios:
+1. All cloud providers change SLA format simultaneously (parsing breaks)
+2. Groq AND fallback models both go offline (no LLM extraction)
+3. ChromaDB corruption without backup (loss of embeddings)
+4. User trusts wrong recommendation for mission-critical system
+
+Mitigations already in place:
+- Curated fallback values (survive total extraction failure)
+- Model fallback chain
+- Persistent volumes with backup potential
+- Low-confidence detection warns users when results are unreliable
+- Disclaimer: System provides recommendations, not guarantees
+
+
+SECTION 11: KEY FORMULAS AND LOGIC SUMMARY
+
+TOPSIS Score:
+  C_i = D-_i / (D+_i + D-_i)
+  where D+/D- are Euclidean distances from ideal/anti-ideal solutions
+
+Final Ranking Score:
+  final = 0.50*TOPSIS + 0.20*cosine_similarity + 0.30*XGBoost_score
+  Displayed as: final * 100 (0-100 scale)
+
+XGBoost Cold Start Heuristic:
+  score = 0.40*topsis + 0.20*uptime_ok + 0.15*rto_meets +
+          0.15*region_match + 0.10*compliance_overlap
+
+Cost Efficiency:
+  cost_efficiency = 1 - (provider_cost / max_cost_across_providers)
+
+Value Score:
+  value = 0.60*sla_score + 0.40*cost_efficiency
+
+SLA Change Detection Threshold:
+  cosine_similarity(new_chunk, old_chunk) < 0.95 => CHANGED
+
+Weight Normalization:
+  normalized_weight_j = raw_weight_j / sum(all raw weights)
+
+Cosine Similarity from ChromaDB:
+  similarity = 1 - cosine_distance
+
+
+SECTION 12: SCORING RUBRIC FOR EVALUATOR
+
+Category                          Max Marks    Evaluation Criteria
+--------                          ---------    -------------------
+Problem Understanding              10          Clear articulation of problem,
+                                               gap analysis, user needs
+
+Architecture Design                15          Component justification,
+                                               data flow, technology choices
+
+NLP/RAG Implementation             15          Embedding choice, chunking,
+                                               retrieval strategy, LLM usage
+
+TOPSIS Mathematical Foundation     15          Formula derivation, criteria
+                                               selection, weight handling,
+                                               edge cases
+
+ML/XGBoost Implementation          10          Features, cold-start, feedback
+                                               loop, NDCG understanding
+
+Database and Schema Design         10          Normalization, relationships,
+                                               type choices, scalability
+
+Code Quality and Testing            5          Test coverage, error handling,
+                                               code organization
+
+Scalability and Limitations        10          Honest assessment, mitigation
+                                               strategies, production readiness
+
+Critical Thinking                  10          Handles challenging questions,
+                                               acknowledges limitations,
+                                               proposes alternatives
+
+TOTAL                             100
+
+
+PASS CRITERIA:
+- Minimum 50/100 overall
+- Must score at least 8/15 on TOPSIS section
+- Must score at least 8/15 on NLP/RAG section
+- Must demonstrate understanding of end-to-end data flow
+
+DISTINCTION CRITERIA (75+):
+- Can derive TOPSIS formulas without notes
+- Explains XGBoost feature engineering rationale
+- Proposes meaningful improvements and future work
+- Handles all "Why Not" questions with technical depth
+
+
+END OF VIVA EVALUATION DOCUMENT
+Total Questions: 65+
+Estimated Viva Duration: 45-60 minutes

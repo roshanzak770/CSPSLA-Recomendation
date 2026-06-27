@@ -53,6 +53,7 @@ class ProviderResult:
     compliance_tags: List[str] = field(default_factory=list)
     sla_uptime_pct: Optional[float] = None
     sla_rto_hours: Optional[float] = None
+    sla_url: Optional[str] = None
 
 
 @dataclass
@@ -61,6 +62,32 @@ class PipelineResult:
     provider_results: List[ProviderResult]
     detected_lang: str
     english_query: str
+
+
+# ---------------------------------------------------------------------------
+# Weight key mapping — frontend slider keys → TOPSIS criteria keys
+# ---------------------------------------------------------------------------
+
+_WEIGHT_KEY_MAP = {
+    "uptime":      "uptime_sla_pct",
+    "support":     "support_response_min",
+    "penalties":   "penalty_credit_pct",
+    "geographic":  "region_coverage",
+    "security":    "penalty_credit_pct",   # no direct security criterion; proxy via penalties
+}
+
+
+def _map_weights(frontend_weights: dict) -> dict:
+    """Convert frontend slider keys to TOPSIS criteria keys, merging duplicates by max."""
+    from app.services.topsis import DEFAULT_WEIGHTS
+    result = dict(DEFAULT_WEIGHTS)          # start from defaults so all keys present
+    for fk, value in frontend_weights.items():
+        tk = _WEIGHT_KEY_MAP.get(fk)
+        if tk:
+            result[tk] = max(result.get(tk, 0.0), float(value))
+    # Re-normalise so weights sum to 1.0
+    total = sum(result.values()) or 1.0
+    return {k: v / total for k, v in result.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -93,19 +120,16 @@ def stage1_understand_query(english_query: str) -> QueryRequirements:
 # ---------------------------------------------------------------------------
 
 def stage2_retrieve_chunks(english_query: str, provider_names: List[str]) -> dict[str, float]:
-    """Returns {provider_name: best_cosine_score}, one search per provider to avoid score starvation."""
+    """Returns {provider_name: best_cosine_score}, filtered per-provider in ChromaDB."""
     from app.services.ingestion import search_sla
     scores: dict[str, float] = {}
     for name in provider_names:
         try:
-            # Search with this provider's exact stored name variants (case-insensitive)
-            chunks = search_sla(english_query, top_k=5)
+            chunks = search_sla(english_query, provider_filter=[name], top_k=5)
             for chunk in chunks:
-                stored = chunk.get("provider", "")
-                if stored.lower() == name.lower():
-                    score = chunk.get("score", 0.0)
-                    if name not in scores or score > scores[name]:
-                        scores[name] = score
+                score = chunk.get("score", 0.0)
+                if name not in scores or score > scores[name]:
+                    scores[name] = score
         except Exception as e:
             logger.warning("ChromaDB retrieval failed for %s: %s", name, e)
     return scores
@@ -236,6 +260,9 @@ def run_pipeline(
     """
     from app.services.translation import to_english
 
+    # Translate frontend weight keys to TOPSIS criteria keys
+    topsis_weights = _map_weights(weights) if weights else None
+
     # Translate to English
     english_query, detected_lang = to_english(raw_query)
 
@@ -263,7 +290,7 @@ def run_pipeline(
         )
 
     # Stage 4 — TOPSIS
-    topsis_results = topsis_rank(topsis_inputs, weights=weights or DEFAULT_WEIGHTS)
+    topsis_results = topsis_rank(topsis_inputs, weights=topsis_weights or DEFAULT_WEIGHTS)
 
     # Stage 5 — XGBoost re-ranking
     xgb_records = [

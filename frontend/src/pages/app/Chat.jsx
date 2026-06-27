@@ -58,12 +58,36 @@ function Message({ msg }) {
               {showSources && (
                 <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                   className="overflow-hidden mt-1 space-y-1">
-                  {msg.sources.map((s, i) => (
-                    <a key={i} href={s.url || '#'} target="_blank" rel="noreferrer"
-                      className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors">
-                      <ExternalLink className="w-3 h-3" /> {s.title || s.url || `Source ${i+1}`}
-                    </a>
-                  ))}
+                  {msg.sources.map((s, i) => {
+                    // Pretty label: shorten long URLs so the pill doesn't
+                    // overflow the chat bubble, but keep enough context to
+                    // identify the document.
+                    const label = (() => {
+                      if (s.title) return s.title.length > 70 ? s.title.slice(0, 67) + '…' : s.title;
+                      if (s.url)   return s.url.length   > 70 ? s.url.slice(0, 67)   + '…' : s.url;
+                      return `${s.provider ?? 'Source'} — page ${s.page ?? '?'}`;
+                    })();
+                    // If we have a real URL → external anchor that opens in
+                    // a new tab. Otherwise → a non-interactive div so a
+                    // dead `href="#"` can't scroll the user back to the top
+                    // of the page (which previously looked like a "redirect
+                    // to fresh chat").
+                    return s.url ? (
+                      <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors break-all">
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                        {label}
+                      </a>
+                    ) : (
+                      <div key={i}
+                        className="flex items-center gap-1.5 text-xs text-slate-500"
+                        title="No public URL available for this source"
+                      >
+                        <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />
+                        {label}
+                      </div>
+                    );
+                  })}
                 </motion.div>
               )}
             </AnimatePresence>

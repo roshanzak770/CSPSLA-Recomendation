@@ -9,7 +9,6 @@ GET    /api/admin/feedback/stats    — feedback counts and XGBoost training sta
 POST   /api/admin/retrain-now       — manually trigger XGBoost retraining
 """
 
-import shutil
 import uuid
 from pathlib import Path
 
@@ -21,11 +20,38 @@ from sqlalchemy import select, delete, func
 from app.core.config import settings
 from app.core.schemas import IngestRequest, IngestUrlRequest, IngestResponse, IngestTextRequest, FeedbackStatsResponse
 from app.db.session import get_db
-from app.models.models import Provider, SLADocument, SLAChunk, SLAMetrics, Ranking, Feedback, SLAAlert
-from app.services.ingestion import ingest_pdf, _get_embedding_model, chunk_pages, embed_and_store
+from app.models.models import Provider, SLADocument, SLAChunk, SLAMetrics, Ranking, Feedback, SLAAlert, Query, PricingCache, AlertThreshold
+from app.services.ingestion import ingest_pdf, _get_embedding_model, chunk_pages, embed_and_store, EmptyDocumentError
 from app.services.llm_router import llm_router
 
 SLA_DOCS_DIR = Path("/app/sla_docs")
+
+# Canonical provider names — any alias maps to this exact string stored in DB + ChromaDB
+_PROVIDER_ALIASES: dict[str, str] = {
+    "amazon":        "AWS",
+    "amazon web services": "AWS",
+    "aws":           "AWS",
+    "microsoft azure": "Azure",
+    "microsoft":     "Azure",
+    "azure":         "Azure",
+    "google cloud platform": "GCP",
+    "google cloud":  "GCP",
+    "gcloud":        "GCP",
+    "gcp":           "GCP",
+    "google":        "GCP",
+    "oracle cloud infrastructure": "Oracle",
+    "oracle cloud":  "Oracle",
+    "oci":           "Oracle",
+    "oracle":        "Oracle",
+    "ibm cloud":     "IBM",
+    "ibm":           "IBM",
+}
+
+
+def _normalize_provider(name: str) -> str:
+    """Return the canonical provider name, e.g. 'IBM Cloud' → 'IBM'."""
+    return _PROVIDER_ALIASES.get(name.strip().lower(), name.strip())
+
 
 router = APIRouter()
 _embedding_model = None  # Module-level cache
@@ -56,6 +82,8 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
     import urllib.request
     import urllib.error
 
+    provider = _normalize_provider(provider)
+
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; CloudSLA-Recommender/1.0)"}
         request = urllib.request.Request(url, headers=headers)
@@ -69,7 +97,11 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
 
     SLA_DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
-    prov_result = await db.execute(select(Provider).where(Provider.name.ilike(provider)))
+    # Exact match against the canonical name — we already normalised `provider`
+    # above. Using ilike here breaks when the DB has historical duplicates
+    # (e.g. "Azure" + "Microsoft Azure") and scalar_one_or_none() throws
+    # "Multiple rows were found when one or none was required".
+    prov_result = await db.execute(select(Provider).where(Provider.name == provider))
     prov = prov_result.scalar_one_or_none()
     if not prov:
         prov = Provider(name=provider)
@@ -86,7 +118,12 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
         db.add(doc)
         await db.flush()
 
-        result = ingest_pdf(provider_name=provider, document_id=str(doc_id), pdf_path=str(dest), model=model)
+        try:
+            result = ingest_pdf(provider_name=provider, document_id=str(doc_id), pdf_path=str(dest), model=model)
+        except EmptyDocumentError as e:
+            await db.rollback()
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=str(e))
         doc.file_hash = result["file_hash"]
 
         from app.services.ingestion import extract_text_from_pdf
@@ -103,7 +140,7 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
 
         full_text = " ".join(p["text"] for p in pages[:10])
         try:
-            metrics_dict = llm_router.extract_sla_metrics(full_text[:3000])
+            metrics_dict = llm_router.extract_sla_metrics(full_text[:30000])
             db.add(SLAMetrics(
                 provider_id=prov.id, document_id=doc_id,
                 uptime_sla_pct=metrics_dict.get("uptime_sla_pct"),
@@ -119,6 +156,11 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
             pass
 
         await db.commit()
+        # Delete PDF from disk — text is in PostgreSQL (SLAChunk) and ChromaDB
+        try:
+            dest.unlink(missing_ok=True)
+        except Exception:
+            pass
         return {"chunks_created": result["chunks_created"], "embedding_time_sec": result["embedding_time_sec"]}
 
     # HTML path
@@ -189,7 +231,7 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
         ))
 
     try:
-        metrics_dict = llm_router.extract_sla_metrics(full_text[:3000])
+        metrics_dict = llm_router.extract_sla_metrics(full_text[:30000])
         db.add(SLAMetrics(
             provider_id=prov.id, document_id=doc_id,
             uptime_sla_pct=metrics_dict.get("uptime_sla_pct"),
@@ -213,13 +255,15 @@ async def ingest_sla(req: IngestRequest, db: AsyncSession = Depends(get_db), _: 
     if not Path(req.pdf_path).exists():
         raise HTTPException(status_code=400, detail=f"PDF not found: {req.pdf_path}")
 
+    provider_name = _normalize_provider(req.provider)
+
     # Get or create provider
     prov_result = await db.execute(
-        select(Provider).where(Provider.name.ilike(req.provider))
+        select(Provider).where(Provider.name == provider_name)
     )
     provider = prov_result.scalar_one_or_none()
     if not provider:
-        provider = Provider(name=req.provider)
+        provider = Provider(name=provider_name)
         db.add(provider)
         await db.flush()
 
@@ -235,12 +279,16 @@ async def ingest_sla(req: IngestRequest, db: AsyncSession = Depends(get_db), _: 
 
     # Run ingestion pipeline
     model = _get_model()
-    result = ingest_pdf(
-        provider_name=req.provider,
-        document_id=str(doc_id),
-        pdf_path=req.pdf_path,
-        model=model,
-    )
+    try:
+        result = ingest_pdf(
+            provider_name=provider_name,
+            document_id=str(doc_id),
+            pdf_path=req.pdf_path,
+            model=model,
+        )
+    except EmptyDocumentError as e:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
 
     # Update document with hash
     doc.file_hash = result["file_hash"]
@@ -250,19 +298,18 @@ async def ingest_sla(req: IngestRequest, db: AsyncSession = Depends(get_db), _: 
     pages = extract_text_from_pdf(req.pdf_path)
     chunks = chunk_pages(pages)
     for chunk in chunks:
-        chunk_id = f"{req.provider.lower()}_{doc_id}_{chunk['chunk_index']}"
         db.add(SLAChunk(
             document_id=doc_id,
             chunk_text=chunk["chunk_text"],
-            embedding_id=chunk_id,
+            embedding_id=f"{provider_name.lower()}_{doc_id}_{chunk['chunk_index']}",
             page_number=chunk["page_number"],
             chunk_index=chunk["chunk_index"],
         ))
 
     # Extract SLA metrics via LLM from the full text
-    full_text = " ".join(p["text"] for p in pages[:10])  # first 10 pages
+    full_text = " ".join(p["text"] for p in pages[:10])
     try:
-        metrics_dict = llm_router.extract_sla_metrics(full_text[:3000])
+        metrics_dict = llm_router.extract_sla_metrics(full_text[:30000])
         db.add(SLAMetrics(
             provider_id=provider.id,
             document_id=doc_id,
@@ -297,18 +344,38 @@ async def upload_sla_pdf(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
+    provider_name = _normalize_provider(provider)
+
     SLA_DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{provider.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}.pdf"
+    safe_name = f"{provider_name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}.pdf"
     dest = SLA_DOCS_DIR / safe_name
 
+    # Hard cap matches the frontend MAX_PDF_MB constant. We stream + count
+    # rather than reading the body into memory, and abort + delete on overflow.
+    # 50 MB allows multi-language master SLAs (e.g. Microsoft Online Services
+    # SLA in all languages, which can hit ~30 MB).
+    MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
+    written = 0
     with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_PDF_BYTES:
+                f.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"PDF exceeds the {MAX_PDF_BYTES // (1024 * 1024)} MB upload limit.",
+                )
+            f.write(chunk)
 
     # Get or create provider
-    prov_result = await db.execute(select(Provider).where(Provider.name.ilike(provider)))
+    prov_result = await db.execute(select(Provider).where(Provider.name == provider_name))
     prov = prov_result.scalar_one_or_none()
     if not prov:
-        prov = Provider(name=provider)
+        prov = Provider(name=provider_name)
         db.add(prov)
         await db.flush()
 
@@ -318,7 +385,15 @@ async def upload_sla_pdf(
     await db.flush()
 
     model = _get_model()
-    result = ingest_pdf(provider_name=provider, document_id=str(doc_id), pdf_path=str(dest), model=model)
+    try:
+        result = ingest_pdf(provider_name=provider_name, document_id=str(doc_id), pdf_path=str(dest), model=model)
+    except EmptyDocumentError as e:
+        # Scanned PDF or otherwise empty — undo the half-written state
+        # (Provider row stays; SLADocument row + on-disk PDF are removed)
+        # and surface a clear 422 to the user.
+        await db.rollback()
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(e))
     doc.file_hash = result["file_hash"]
 
     from app.services.ingestion import extract_text_from_pdf, chunk_pages
@@ -328,14 +403,14 @@ async def upload_sla_pdf(
         db.add(SLAChunk(
             document_id=doc_id,
             chunk_text=chunk["chunk_text"],
-            embedding_id=f"{provider.lower()}_{doc_id}_{chunk['chunk_index']}",
+            embedding_id=f"{provider_name.lower()}_{doc_id}_{chunk['chunk_index']}",
             page_number=chunk["page_number"],
             chunk_index=chunk["chunk_index"],
         ))
 
     full_text = " ".join(p["text"] for p in pages[:10])
     try:
-        metrics_dict = llm_router.extract_sla_metrics(full_text[:3000])
+        metrics_dict = llm_router.extract_sla_metrics(full_text[:30000])
         db.add(SLAMetrics(
             provider_id=prov.id,
             document_id=doc_id,
@@ -352,6 +427,11 @@ async def upload_sla_pdf(
         pass
 
     await db.commit()
+    # Delete PDF from disk — text is persisted in PostgreSQL (SLAChunk) and ChromaDB
+    try:
+        dest.unlink(missing_ok=True)
+    except Exception:
+        pass
     return IngestResponse(chunks_created=result["chunks_created"], embedding_time_sec=result["embedding_time_sec"])
 
 
@@ -392,10 +472,19 @@ async def delete_provider(provider_id: uuid.UUID, db: AsyncSession = Depends(get
         await db.execute(delete(SLAMetrics).where(SLAMetrics.document_id.in_(doc_ids)))
         await db.execute(delete(SLADocument).where(SLADocument.provider_id == provider_id))
 
+    await db.execute(delete(AlertThreshold).where(AlertThreshold.provider_id == provider_id))
     await db.execute(delete(SLAAlert).where(SLAAlert.provider_id == provider_id))
     await db.execute(delete(Feedback).where(Feedback.provider_id == provider_id))
     await db.execute(delete(Ranking).where(Ranking.provider_id == provider_id))
+    await db.execute(delete(PricingCache).where(PricingCache.provider_id == provider_id))
     await db.execute(delete(SLAMetrics).where(SLAMetrics.provider_id == provider_id))
+    # Delete queries that referenced this provider via rankings (orphaned queries)
+    orphan_query_ids = await db.execute(
+        select(Query.id).where(~Query.id.in_(select(Ranking.query_id)))
+    )
+    orphan_ids = [r[0] for r in orphan_query_ids.all()]
+    if orphan_ids:
+        await db.execute(delete(Query).where(Query.id.in_(orphan_ids)))
     await db.execute(delete(Provider).where(Provider.id == provider_id))
 
     await db.commit()
@@ -421,16 +510,18 @@ async def ingest_sla_text(req: IngestTextRequest, db: AsyncSession = Depends(get
     if len(text) < 200:
         raise HTTPException(status_code=422, detail="Text too short — minimum 200 characters required.")
 
-    prov_result = await db.execute(select(Provider).where(Provider.name.ilike(req.provider)))
+    provider_name = _normalize_provider(req.provider)
+
+    prov_result = await db.execute(select(Provider).where(Provider.name == provider_name))
     prov = prov_result.scalar_one_or_none()
     if not prov:
-        prov = Provider(name=req.provider)
+        prov = Provider(name=provider_name)
         db.add(prov)
         await db.flush()
 
     doc_id = uuid.uuid4()
     title_slug = re.sub(r"[^a-z0-9]+", "_", req.title.lower())[:40]
-    fake_path = f"manual_text://{req.provider}/{title_slug}_{doc_id.hex[:8]}"
+    fake_path = f"manual_text://{provider_name}/{title_slug}_{doc_id.hex[:8]}"
     file_hash = hashlib.sha256(text.encode()).hexdigest()
 
     doc = SLADocument(id=doc_id, provider_id=prov.id, file_path=fake_path, file_hash=file_hash)
@@ -447,7 +538,7 @@ async def ingest_sla_text(req: IngestTextRequest, db: AsyncSession = Depends(get
     chunks_list = chunk_pages(raw_pages)
     start = time.time()
     chunk_ids = embed_and_store(
-        provider_name=req.provider,
+        provider_name=provider_name,
         document_id=str(doc_id),
         source_file=fake_path,
         chunks=chunks_list,
@@ -459,13 +550,13 @@ async def ingest_sla_text(req: IngestTextRequest, db: AsyncSession = Depends(get
         db.add(SLAChunk(
             document_id=doc_id,
             chunk_text=chunk["chunk_text"],
-            embedding_id=f"{req.provider.lower()}_{doc_id}_{chunk['chunk_index']}",
+            embedding_id=f"{provider_name.lower()}_{doc_id}_{chunk['chunk_index']}",
             page_number=chunk["page_number"],
             chunk_index=chunk["chunk_index"],
         ))
 
     try:
-        metrics_dict = llm_router.extract_sla_metrics(text[:3000])
+        metrics_dict = llm_router.extract_sla_metrics(text[:30000])
         db.add(SLAMetrics(
             provider_id=prov.id, document_id=doc_id,
             uptime_sla_pct=metrics_dict.get("uptime_sla_pct"),

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, SlidersHorizontal, AlertTriangle, Zap, Globe, CloudDownload } from 'lucide-react';
+import { Search, ThumbsUp, ThumbsDown, ChevronDown, ChevronUp, SlidersHorizontal, AlertTriangle, Zap, Globe, CloudDownload, ExternalLink, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -63,12 +63,17 @@ export default function Recommend() {
   const [selectedLang, setSelectedLang] = useState('English');
   const [results, setResults] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState({});
+  // Set of "<queryId>:<providerId>:<signal>" strings we've already emitted
+  // for the current session — prevents duplicate implicit signals (e.g. user
+  // clicking View SLA multiple times for the same recommendation should not
+  // inflate the `accepted_recommendation` count). Cleared on every new query.
+  const [implicitFired, setImplicitFired] = useState(new Set());
 
   const { data: ingested = [] } = useQuery({ queryKey: ['ingested'], queryFn: api.ingestedProviders });
 
   const queryMut = useMutation({
     mutationFn: () => api.query(query, weights, selectedLang),
-    onSuccess: (data) => { setResults(data); setFeedbackSent({}); },
+    onSuccess: (data) => { setResults(data); setFeedbackSent({}); setImplicitFired(new Set()); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -77,6 +82,19 @@ export default function Recommend() {
     onSuccess: (_, vars) => setFeedbackSent(prev => ({ ...prev, [vars.providerId]: vars.signal })),
     onError: (e) => toast.error(e.message),
   });
+
+  // Fire-and-forget implicit signal — silent on success, silent on failure.
+  // Used for `accepted_recommendation` and `clicked_provider` which should
+  // never surface a toast or change card appearance. Deduplicates per session.
+  function fireImplicitSignal(queryId, providerId, signal) {
+    if (!queryId || !providerId || !signal) return;
+    const key = `${queryId}:${providerId}:${signal}`;
+    if (implicitFired.has(key)) return;
+    setImplicitFired(prev => new Set(prev).add(key));
+    // Don't use the visible feedbackMut — keep these signals quiet so a
+    // network failure doesn't toast errors at the user.
+    api.feedback(queryId, providerId, signal).catch(() => {});
+  }
 
   const autoFetchMut = useMutation({
     mutationFn: () => api.autoFetch(query.trim() || 'cloud SLA', null),
@@ -233,8 +251,12 @@ export default function Recommend() {
             const color = provColor(name);
             const fbKey = r.provider_id || name;
             return (
-              <motion.div key={name} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-                <Card className="relative overflow-hidden">
+              <motion.div
+                key={name}
+                initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
+                onClick={() => fireImplicitSignal(results.query_id, fbKey, 'clicked_provider')}
+              >
+                <Card className="relative overflow-hidden cursor-pointer">
                   {i === 0 && (
                     <div className="absolute top-0 left-0 right-0 h-0.5" style={{ background: `linear-gradient(90deg, ${color}80, transparent)` }} />
                   )}
@@ -291,25 +313,52 @@ export default function Recommend() {
                     </div>
                   )}
 
-                  {r.explanation && (
-                    <div className="mt-3">
-                      <p className="text-sm text-slate-400 leading-relaxed">{r.explanation}</p>
-                      {results.lang && results.lang !== 'English' && (
-                        <div className="flex items-center gap-1 text-[10px] text-blue-400/60 mt-1">
-                          <Globe className="w-3 h-3" /> Explained in {results.lang}
-                        </div>
-                      )}
+                  {/* Explanation block — always rendered for visibility.
+                       Top-3 results carry an LLM-generated paragraph; lower
+                       ranks get a placeholder instead of silent emptiness. */}
+                  <div className="mt-4 p-3 rounded-lg bg-blue-500/5 border border-blue-500/15">
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-blue-400 mb-1.5 uppercase tracking-wider">
+                      <Sparkles className="w-3 h-3" />
+                      Why this rank
                     </div>
-                  )}
+                    {r.explanation ? (
+                      <>
+                        <p className="text-sm text-slate-200 leading-relaxed">{r.explanation}</p>
+                        {results.lang && results.lang !== 'English' && (
+                          <div className="flex items-center gap-1 text-[10px] text-blue-400/70 mt-1.5">
+                            <Globe className="w-3 h-3" /> Explained in {results.lang}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-xs text-slate-500 italic">
+                        Detailed explanations are generated for the top 3 results. This provider scored {r.final_score?.toFixed(1)}/100 based on its TOPSIS, semantic-match, and learned-ranker components shown above.
+                      </p>
+                    )}
+                  </div>
 
-                  <div className="mt-4 flex items-center gap-2">
-                    <span className="text-xs text-slate-500 mr-1">Helpful?</span>
-                    {(['up', 'down']).map(sig => (
-                      <button key={sig} onClick={() => feedbackMut.mutate({ queryId: results.query_id, providerId: fbKey, signal: sig })}
-                        className={`p-1.5 rounded-md transition-colors ${feedbackSent[fbKey] === sig ? (sig === 'up' ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10') : 'text-slate-600 hover:text-slate-300'}`}>
-                        {sig === 'up' ? <ThumbsUp className="w-3.5 h-3.5" /> : <ThumbsDown className="w-3.5 h-3.5" />}
-                      </button>
-                    ))}
+                  <div className="mt-4 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 mr-1">Helpful?</span>
+                      {(['up', 'down']).map(sig => (
+                        <button key={sig} onClick={() => feedbackMut.mutate({ queryId: results.query_id, providerId: fbKey, signal: sig })}
+                          className={`p-1.5 rounded-md transition-colors ${feedbackSent[fbKey] === sig ? (sig === 'up' ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10') : 'text-slate-600 hover:text-slate-300'}`}>
+                          {sig === 'up' ? <ThumbsUp className="w-3.5 h-3.5" /> : <ThumbsDown className="w-3.5 h-3.5" />}
+                        </button>
+                      ))}
+                    </div>
+                    {r.sla_url && (
+                      <a
+                        href={r.sla_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => fireImplicitSignal(results.query_id, fbKey, 'accepted_recommendation')}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium hover:bg-blue-500/20 transition-colors"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        View SLA
+                      </a>
+                    )}
                   </div>
                 </Card>
               </motion.div>

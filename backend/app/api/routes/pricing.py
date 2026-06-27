@@ -17,6 +17,7 @@ from sqlalchemy import select, func, delete as sa_delete
 
 from app.db.session import get_db
 from app.models.models import Provider, PricingCache
+from app.api.routes.admin import _normalize_provider
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
 
@@ -57,9 +58,13 @@ async def _insert_provider_items(
     """Upsert providers and insert pricing items from fetch_all_providers() result."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     for prov_name, items in all_data.items():
-        # Get or create the Provider row
+        # Normalise to the canonical name (matches _PROVIDER_ALIASES in admin.py)
+        # and use exact-match lookup. Previously this used Provider.name.ilike(...),
+        # which combined with non-canonical fetcher keys ("IBM Cloud" / "Oracle
+        # Cloud") caused refresh to *create* duplicate Provider rows on every run.
+        prov_name = _normalize_provider(prov_name)
         prov_result = await db.execute(
-            select(Provider).where(Provider.name.ilike(prov_name))
+            select(Provider).where(Provider.name == prov_name)
         )
         provider = prov_result.scalar_one_or_none()
         if not provider:

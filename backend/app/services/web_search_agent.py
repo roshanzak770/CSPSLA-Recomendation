@@ -5,9 +5,17 @@ Falls back to curated official SLA URLs when DDG is unavailable.
 
 import re
 import time
+import random
 import logging
+from threading import Lock
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache: query → (timestamp, results)
+# Avoids hammering DDG on every keystroke and survives transient rate-limits.
+_DDG_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_DDG_CACHE_TTL_SEC = 900  # 15 minutes
+_DDG_CACHE_LOCK = Lock()
 
 # Canned queries per known provider for scheduled discovery
 KNOWN_PROVIDERS: dict[str, list[str]] = {
@@ -123,26 +131,62 @@ def _detect_provider_from_query(query: str) -> str | None:
     return None
 
 
-def _try_ddg_search(query: str, max_results: int) -> list[dict]:
-    """Attempt a DuckDuckGo search. Returns [] on any failure (rate limit, not installed, etc.)."""
+def _ddg_text_search(query: str, max_results: int) -> list[dict]:
+    """Single DDG call. Imports the new `ddgs` package, falling back to the
+    legacy `duckduckgo_search` name if only the old version is installed."""
+    DDGS = None
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS  # new package name (2025+)
     except ImportError:
-        logger.warning("duckduckgo-search not installed — DDG search unavailable.")
+        try:
+            from duckduckgo_search import DDGS  # legacy fallback
+        except ImportError:
+            logger.warning("Neither 'ddgs' nor 'duckduckgo_search' installed — DDG search unavailable.")
+            return []
+
+    ddgs = DDGS()
+    return list(ddgs.text(query, max_results=max_results))
+
+
+def _try_ddg_search(query: str, max_results: int) -> list[dict]:
+    """Attempt a DuckDuckGo search with caching + retry-on-ratelimit.
+    Returns [] only after every retry has failed."""
+    cache_key = f"{query.strip().lower()}|{max_results}"
+
+    # 1 — Cache hit?
+    with _DDG_CACHE_LOCK:
+        entry = _DDG_CACHE.get(cache_key)
+        if entry and (time.time() - entry[0]) < _DDG_CACHE_TTL_SEC:
+            logger.info("DDG cache hit for '%s'", query)
+            return entry[1]
+
+    # 2 — Live search with up-to-3 attempts and exponential-with-jitter backoff
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw_results = _ddg_text_search(query, max_results)
+            break
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            is_rate_limited = "ratelimit" in msg or "202" in msg or "429" in msg
+            if attempt < 2 and is_rate_limited:
+                sleep_s = (1.5 ** attempt) + random.uniform(0.2, 0.8)
+                logger.info("DDG rate-limited (attempt %d) — backing off %.1fs", attempt + 1, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            logger.warning("DDG search failed for query '%s': %s", query, e)
+            return []
+    else:
+        logger.warning("DDG search exhausted retries for '%s': %s", query, last_err)
         return []
 
-    try:
-        ddgs = DDGS()
-        raw_results = list(ddgs.text(query, max_results=max_results))
-    except Exception as e:
-        logger.warning("DDG search failed for query '%s': %s", query, e)
-        return []
-
+    # 3 — Normalise + score
     results = []
     for r in raw_results:
-        url = r.get("href", "")
+        url = r.get("href") or r.get("url") or ""
         title = r.get("title", "")
-        snippet = r.get("body", "")
+        snippet = r.get("body") or r.get("description") or ""
         score = _score_result(title, url)
         results.append({
             "title": title,
@@ -153,6 +197,12 @@ def _try_ddg_search(query: str, max_results: int) -> list[dict]:
         })
 
     results.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+    # 4 — Cache successful result (only non-empty, to allow quick recovery)
+    if results:
+        with _DDG_CACHE_LOCK:
+            _DDG_CACHE[cache_key] = (time.time(), results)
+
     return results
 
 

@@ -16,7 +16,7 @@ services:
       - ./backend:/app
       - ./chromadb:/app/chromadb
       - ./sla_docs:/app/sla_docs
-      - ~/.cache/huggingface:/root/.cache/huggingface
+      - hf_cache:/root/.cache/huggingface
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
@@ -66,7 +66,15 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      # IMPORTANT: ChromaDB's image (as of 0.5.x / March 2026 build) persists
+      # to /data internally — NOT the older /chroma/chroma path. Mounting
+      # the volume at the wrong path means the data lives in the container's
+      # ephemeral writable layer and is destroyed by any container recreate
+      # (docker compose down -v, image rebuild, or even `docker rm`).
+      # If a future Chroma upgrade silently changes this path again, check
+      # `docker exec <chromadb-container> ls /data` to confirm before
+      # changing this mount.
+      - chroma_data:/data
     restart: unless-stopped
 
   celery_worker:
@@ -98,3 +106,4 @@ services:
 volumes:
   postgres_data:
   chroma_data:
+  hf_cache:

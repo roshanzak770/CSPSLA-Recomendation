@@ -7,6 +7,7 @@ Fallback: llama-3.2-3b-preview if primary is rate-limited.
 
 import json
 import re
+import time
 import logging
 
 import requests
@@ -16,31 +17,135 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _BASE_URL      = "https://api.groq.com/openai/v1/chat/completions"
-_PRIMARY_MODEL = "llama-3.1-8b-instant"
-_FALLBACK_MODEL = "llama-3.2-3b-preview"
+# Primary: best general-purpose Groq instant model as of 2026.
+# Fallbacks: try the larger 70B then the supersmall 8B variant if the primary
+# is rate-limited. Both are currently active on Groq's free tier.
+# (llama-3.2-3b-preview was decommissioned in mid-2026 — do not put it back.)
+_MODEL_CHAIN = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+]
 _TIMEOUT = 30
+_RATE_LIMIT_BACKOFF_SEC = 8   # Groq TPM resets per minute; ~8s usually clears it
+
+
+# ---------------------------------------------------------------------------
+# Helpers used by extract_sla_metrics() — kept at module level so they can be
+# unit-tested in isolation without spinning up the LLM client.
+# ---------------------------------------------------------------------------
+
+# Sane ranges for each numeric field. Anything outside gets dropped to None.
+# These are deliberately generous — we only want to catch obvious extraction
+# misreads (e.g. "99" as uptime when the document actually said "99.99"),
+# not to police the data.
+_METRIC_BOUNDS = {
+    "uptime_sla_pct":       (95.0, 100.0),     # below 95 = misread; above 100 = nonsense
+    "rto_hours":            (0.0,  168.0),     # 0–7 days
+    "rpo_hours":            (0.0,  168.0),
+    "support_response_min": (1,    1440),      # 1 min – 24 h
+    # Cap at 50% — vendors publish tiered credits topping out around 30% in
+    # practice. The LLM otherwise tends to read "100% Service Credit"
+    # (the catastrophic-outage tier) as the headline, which inflates rankings.
+    "penalty_credit_pct":   (0,    50),
+}
+
+
+def _smart_sample(text: str, target_chars: int = 9000) -> str:
+    """Pull head + middle + tail slices so the LLM sees actual SLA content
+    rather than just the cover page / table of contents. Short documents
+    are returned whole.
+
+    Why this matters: a 50-page Oracle PaaS PDF has TOC and definitions for
+    the first ~20 pages, then the real SLA tables — the old [:2000] slice
+    never reached them. The middle slice catches those tables; the tail
+    slice catches appendices (compliance lists, region maps) that vendors
+    often park at the back.
+    """
+    if not text:
+        return ""
+    text = text.replace("\r", "")
+    if len(text) <= target_chars:
+        return text
+
+    third = target_chars // 3
+    head = text[:third]
+    # Middle slice anchored at the document midpoint
+    mid_start = max(third, (len(text) // 2) - (third // 2))
+    middle = text[mid_start:mid_start + third]
+    tail = text[-third:]
+
+    return (
+        head
+        + "\n\n[…document continues…]\n\n"
+        + middle
+        + "\n\n[…document continues…]\n\n"
+        + tail
+    )
+
+
+def _validate_metrics(parsed: dict) -> dict:
+    """Drop nonsense values to None so they trigger curated fallback rather
+    than poisoning TOPSIS. Returns a dict shaped like the original."""
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict = {}
+    for field, (lo, hi) in _METRIC_BOUNDS.items():
+        v = parsed.get(field)
+        if v is None:
+            out[field] = None
+            continue
+        try:
+            num = float(v)
+        except (TypeError, ValueError):
+            out[field] = None
+            continue
+        if num < lo or num > hi:
+            out[field] = None
+            continue
+        # Preserve int-ness for the integer fields
+        out[field] = int(num) if isinstance(_METRIC_BOUNDS[field][0], int) else num
+
+    # Pass through list fields with shallow sanitisation
+    regions = parsed.get("regions") or []
+    compliance = parsed.get("compliance") or []
+    out["regions"]    = [r.strip() for r in regions    if isinstance(r, str) and r.strip()]
+    out["compliance"] = [c.strip() for c in compliance if isinstance(c, str) and c.strip()]
+    out["source_clause"] = parsed.get("source_clause")
+    return out
 
 
 def _chat(messages: list, max_tokens: int = 500, temperature: float = 0.1) -> str:
-    """Call Groq chat completions. Tries primary then fallback model."""
+    """Call Groq chat completions. Walks the model chain in order, and
+    on a 429 (rate limit) sleeps briefly and retries the SAME model once
+    before falling through to the next one. Groq's TPM resets per minute,
+    so a short backoff is usually enough."""
     headers = {
         "Authorization": f"Bearer {settings.groq_api_key}",
         "Content-Type": "application/json",
     }
-    for model in [_PRIMARY_MODEL, _FALLBACK_MODEL]:
-        try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-            r = requests.post(_BASE_URL, headers=headers, json=payload, timeout=_TIMEOUT)
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            logger.warning("Groq %s returned %s: %s", model, r.status_code, r.text[:200])
-        except Exception as e:
-            logger.warning("Groq %s error: %s", model, e)
+    for model in _MODEL_CHAIN:
+        for attempt in range(2):  # one retry per model on rate-limit
+            try:
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                r = requests.post(_BASE_URL, headers=headers, json=payload, timeout=_TIMEOUT)
+                if r.status_code == 200:
+                    return r.json()["choices"][0]["message"]["content"].strip()
+                if r.status_code == 429 and attempt == 0:
+                    logger.info("Groq %s rate-limited, sleeping %ss and retrying once",
+                                model, _RATE_LIMIT_BACKOFF_SEC)
+                    time.sleep(_RATE_LIMIT_BACKOFF_SEC)
+                    continue
+                logger.warning("Groq %s returned %s: %s", model, r.status_code, r.text[:200])
+                break  # non-429 error → don't retry, try next model
+            except Exception as e:
+                logger.warning("Groq %s error: %s", model, e)
+                break
     raise RuntimeError("Groq API unavailable")
 
 
@@ -74,22 +179,63 @@ class LLMRouter:
         return json.loads(text)
 
     def extract_sla_metrics(self, sla_text: str) -> dict:
-        raw = _chat([
-            {"role": "system", "content": "You are an SLA data extractor. Return ONLY valid JSON, no explanation."},
-            {"role": "user",   "content": f"""Extract SLA metrics from this text. Return ONLY valid JSON:
+        """
+        Extract structured SLA metrics from raw document text.
+
+        The old version sent only the first 2000 characters, which on most
+        real SLA PDFs is the table of contents — values appear deeper in
+        the document. This version:
+
+        1. **Smart-samples the text** — head + middle + tail slices so the
+           prompt sees the actual SLA tables, not just the cover page.
+        2. **Asks for the *highest published* tier** — vendors quote several
+           ("99.99% multi-AZ, 99.0% single-AZ"); we want the headline
+           commitment, not the lowest fallback.
+        3. **Demands null over guesses** — explicit instruction so the LLM
+           returns null when a field is genuinely absent, rather than
+           hallucinating a number from unrelated text.
+        4. **Validates the output** — values outside sensible ranges are
+           dropped to null before the caller stores them, so a misread
+           99.0 (against AWS's real 99.99) can never poison TOPSIS.
+        """
+        sample = _smart_sample(sla_text, target_chars=9000)
+
+        prompt = f"""Extract the cloud provider's STRONGEST published SLA commitments from the text below.
+
+Return ONLY this JSON shape (no prose, no markdown fences):
 {{
-  "uptime_sla_pct": float or null,
-  "rto_hours": float or null,
-  "rpo_hours": float or null,
-  "support_response_min": int or null,
-  "penalty_credit_pct": int or null,
-  "regions": ["string"],
-  "compliance": ["string"],
-  "source_clause": "exact quote"
+  "uptime_sla_pct":       float | null,   // The HIGHEST uptime % the provider promises for any tier (e.g. multi-AZ EC2 = 99.99). Range: 95.0–100.0.
+  "rto_hours":            float | null,   // Recovery Time Objective in HOURS. If quoted in minutes/seconds, convert. Range: 0–168.
+  "rpo_hours":            float | null,   // Recovery Point Objective in HOURS. Same conversion rules. Range: 0–168.
+  "support_response_min": int   | null,   // Premium/enterprise tier response time in MINUTES. Range: 1–1440.
+  "penalty_credit_pct":   int   | null,   // The TYPICAL maximum service credit % published in the SLA's main credit table. Most vendors publish 10–30%. Do NOT pick exotic high values like 100% that only apply to catastrophic-outage tiers. Range: 0–50.
+  "regions":              [string],       // Region IDs like "us-east-1", "eastus", "europe-west1". NO descriptions or headers.
+  "compliance":           [string],       // Standards like "SOC2", "HIPAA", "GDPR", "FedRAMP", "ISO27001", "PCI-DSS", "FIPS 140-2".
+  "source_clause":        string | null   // Up to 200 chars quoted directly from the document supporting the uptime number.
 }}
-Text: {sla_text[:2000]}"""},
-        ], max_tokens=500, temperature=0)
-        return self._parse_json(raw)
+
+Rules — read carefully:
+- If a field is NOT mentioned in the text, return **null** (or empty list for regions/compliance). Do NOT guess.
+- For uptime, when the document lists multiple tiers (single-AZ vs multi-AZ, standard vs premium), return the **highest**.
+- "Service Credit" / "Service Credits" / "credit percentage" all map to penalty_credit_pct.
+- regions must be machine-readable IDs (e.g. "us-east-1") — never marketing phrases like "AWS Region" or "all our locations".
+- compliance entries must be standard names — never sentences.
+- Do not paraphrase numbers. If text says "99.99%", return 99.99 (not 99 or 100).
+
+Document text:
+\"\"\"
+{sample}
+\"\"\"
+"""
+        raw = _chat(
+            [
+                {"role": "system", "content": "You are a meticulous SLA data extractor. Return ONLY valid JSON conforming to the schema. Use null when uncertain."},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=900,
+            temperature=0,
+        )
+        return _validate_metrics(self._parse_json(raw))
 
     def understand_query(self, query: str) -> dict:
         raw = _chat([

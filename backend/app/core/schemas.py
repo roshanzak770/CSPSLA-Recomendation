@@ -40,6 +40,7 @@ class ProviderRanking(BaseModel):
     meets_rto: Optional[bool]
     meets_region: Optional[bool]
     compliance_tags: List[str] = []
+    sla_url: Optional[str] = None
 
 
 class QueryResponse(BaseModel):

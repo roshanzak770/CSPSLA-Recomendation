@@ -120,8 +120,27 @@ async def auto_fetch_sla(req: AutoFetchRequest, db: AsyncSession = Depends(get_d
     else:
         results = search_sla_documents(req.query, max_results=10)
         if results:
-            top = sorted(results, key=lambda r: (r["is_pdf"], r["relevance_score"]), reverse=True)[:3]
-            to_ingest = [(r, "Unknown") for r in top]
+            top = sorted(results, key=lambda r: (r["is_pdf"], r["relevance_score"]), reverse=True)[:5]
+            # Route each result to the provider whose official domain matches.
+            # Drop results that don't match any known provider rather than
+            # dumping them onto a fake "Unknown" bucket.
+            domain_map = [
+                ("aws.amazon.com",        "AWS"),
+                ("amazon.com",            "AWS"),
+                ("azure.microsoft.com",   "Azure"),
+                ("microsoft.com",         "Azure"),
+                ("cloud.google.com",      "GCP"),
+                ("google.com",            "GCP"),
+                ("oracle.com",            "Oracle"),
+                ("ibm.com",               "IBM"),
+            ]
+            for r in top:
+                url_lower = r["url"].lower()
+                matched = next((name for dom, name in domain_map if dom in url_lower), None)
+                if matched:
+                    to_ingest.append((r, matched))
+                else:
+                    logger.info("Skipping non-provider URL in auto-fetch: %s", r["url"])
         else:
             # DDG blocked and no provider keyword detected — bootstrap from curated official URLs
             # (one best URL per provider so we seed the DB for all 5 providers at once)
@@ -222,15 +241,17 @@ async def parse_web_sla(req: ParseWebRequest, db: AsyncSession = Depends(get_db)
     # 4 — Extract structured metrics via LLM
     metrics: dict | None = None
     try:
-        metrics = llm_router.extract_sla_metrics(full_text[:3000])
+        metrics = llm_router.extract_sla_metrics(full_text[:30000])
     except Exception:
         pass
 
     # 5 — Generate human-readable summary via LLM
     try:
+        provider_ctx = {"name": req.provider, "url": req.url, **(metrics or {})}
         summary = llm_router.generate_explanation(
             query=f"Summarise the SLA terms for {req.provider}",
-            providers=[{"name": req.provider, "url": req.url, **(metrics or {})}],
+            provider=provider_ctx,
+            all_providers=[provider_ctx],
             lang="English",
         )
         # Prepend a structured metrics block if extraction succeeded

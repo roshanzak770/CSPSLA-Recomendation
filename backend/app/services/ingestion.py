@@ -24,6 +24,15 @@ _model_cache = None
 _chroma_client_cache = None
 
 
+class EmptyDocumentError(ValueError):
+    """Raised when a PDF (or other source) yields no extractable text.
+
+    Most commonly: scanned/image-only PDFs with no OCR text layer. The
+    upload route should catch this and translate to a clear HTTP 422
+    rather than letting it bubble into a 500.
+    """
+
+
 def _get_chroma_client() -> chromadb.HttpClient:
     global _chroma_client_cache
     if _chroma_client_cache is None:
@@ -88,6 +97,13 @@ def embed_and_store(
     Embed chunks and upsert into ChromaDB.
     Returns list of ChromaDB chunk IDs.
     """
+    # Defensive: SentenceTransformer.encode([]) crashes with IndexError on
+    # `all_embeddings[0].dtype` inside the library. Caller must surface a
+    # meaningful error (e.g. scanned PDF → no extractable text); we just
+    # return an empty list here so the failure is loud at the API layer.
+    if not chunks:
+        return []
+
     client = _get_chroma_client()
     collection = client.get_or_create_collection(
         name="sla_documents",
@@ -146,6 +162,16 @@ def ingest_pdf(
 
     pages = extract_text_from_pdf(pdf_path)
     chunks = chunk_pages(pages)
+
+    # Reject scanned/image-only PDFs (no extractable text layer) before
+    # we attempt to embed an empty list — SentenceTransformer crashes on
+    # that, and the caller would only see a generic 500.
+    if not chunks:
+        raise EmptyDocumentError(
+            "PDF contains no extractable text. This usually means it is a "
+            "scanned image (no OCR text layer). Try saving it as a "
+            "searchable PDF, or paste the text manually."
+        )
 
     start = time.time()
     chunk_ids = embed_and_store(
@@ -206,6 +232,7 @@ def search_sla(
             "text": doc,
             "provider": meta.get("provider"),
             "page_number": meta.get("page_number"),
+            "source_file": meta.get("source_file"),   # original URL or filename
             "score": float(1 - dist),  # cosine similarity from distance
         })
     return output
