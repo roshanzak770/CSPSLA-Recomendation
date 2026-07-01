@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import query, providers, feedback, alerts, admin, ask, pricing, search
+from app.api.routes import query, providers, feedback, alerts, admin, ask, pricing, search, services
 from app.core.config import settings
 from app.db.init_db import init_db
 
@@ -43,3 +43,4 @@ app.include_router(admin.router, prefix="/api", tags=["admin"])
 app.include_router(ask.router, prefix="/api", tags=["ask"])
 app.include_router(pricing.router, prefix="/api", tags=["pricing"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(services.router, prefix="/api", tags=["services"])

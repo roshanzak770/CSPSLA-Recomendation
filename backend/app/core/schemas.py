@@ -10,6 +10,11 @@ class QueryRequest(BaseModel):
     text: str
     weights: Optional[dict] = None  # user-adjustable TOPSIS weights
     lang: str = "English"           # response language chosen by user
+    # When set, rankings are computed per-service within this category
+    # instead of per-provider monolith. One of compute/storage/database/
+    # network/serverless (see SERVICE_CATEGORIES in service_catalog.py).
+    # None / omitted = current monolithic per-provider behaviour.
+    service_category: Optional[str] = None
 
 
 class ParsedRequirements(BaseModel):
@@ -41,6 +46,13 @@ class ProviderRanking(BaseModel):
     meets_region: Optional[bool]
     compliance_tags: List[str] = []
     sla_url: Optional[str] = None
+    # Populated when the user filtered by service_category. Lets the UI
+    # show e.g. "AWS — Amazon S3 Standard (99.9 %)" instead of just "AWS".
+    service_name:        Optional[str]   = None
+    service_uptime_pct:  Optional[float] = None
+    service_rto_hours:   Optional[float] = None
+    service_rpo_hours:   Optional[float] = None
+    service_category:    Optional[str]   = None
 
 
 class QueryResponse(BaseModel):
@@ -129,11 +141,13 @@ class AlertSchema(BaseModel):
 class IngestRequest(BaseModel):
     provider: str
     pdf_path: str
+    service_category: Optional[str] = None   # compute|storage|database|network|serverless
 
 
 class IngestUrlRequest(BaseModel):
     provider: str
     url: str
+    service_category: Optional[str] = None
 
 
 class IngestResponse(BaseModel):
@@ -146,12 +160,20 @@ class IngestResponse(BaseModel):
 class AskRequest(BaseModel):
     question: str
     provider: Optional[str] = None  # optional filter to a specific provider
+    # Optional service-category filter — when set we look for chunks tagged
+    # with this service category first, and fall back to provider-only with
+    # a heads-up note when no category-tagged content exists yet.
+    service_category: Optional[str] = None
     lang: str = "English"  # response language chosen by user
 
 
 class AskResponse(BaseModel):
     answer: str
     sources: List[dict]
+    # Human-readable note explaining when we fell back (e.g. "No storage-
+    # specific SLA found for AWS — showing general AWS SLA instead").
+    # null in the happy path. Frontend renders this above the answer.
+    info: Optional[str] = None
 
 
 # --- Web search / discovery schemas ---
@@ -179,12 +201,14 @@ class SLASearchResponse(BaseModel):
 class IngestSelectedRequest(BaseModel):
     provider: str
     urls: List[str]
+    service_category: Optional[str] = None
 
 
 class IngestTextRequest(BaseModel):
     provider: str
     text: str
     title: str = "Manual paste"
+    service_category: Optional[str] = None
 
 
 class BatchIngestResult(BaseModel):

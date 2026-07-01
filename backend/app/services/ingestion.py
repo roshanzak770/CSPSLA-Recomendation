@@ -92,10 +92,15 @@ def embed_and_store(
     source_file: str,
     chunks: List[dict],
     model: SentenceTransformer,
+    service_category: str | None = None,
 ) -> List[str]:
     """
     Embed chunks and upsert into ChromaDB.
     Returns list of ChromaDB chunk IDs.
+
+    `service_category` is stored in each chunk's metadata when supplied — it
+    lets downstream search filter by category ("show me only storage SLA
+    excerpts for AWS") in addition to provider.
     """
     # Defensive: SentenceTransformer.encode([]) crashes with IndexError on
     # `all_embeddings[0].dtype` inside the library. Caller must surface a
@@ -119,16 +124,18 @@ def embed_and_store(
         f"{provider_name.lower()}_{document_id}_{c['chunk_index']}"
         for c in chunks
     ]
-    metadatas = [
-        {
+    metadatas = []
+    for c in chunks:
+        md = {
             "provider": provider_name,
             "document_id": document_id,
             "source_file": source_file,
             "page_number": c["page_number"],
             "chunk_index": c["chunk_index"],
         }
-        for c in chunks
-    ]
+        if service_category:
+            md["service_category"] = service_category.lower()
+        metadatas.append(md)
 
     collection.upsert(
         ids=ids,
@@ -152,10 +159,15 @@ def ingest_pdf(
     document_id: str,
     pdf_path: str,
     model: SentenceTransformer | None = None,
+    service_category: str | None = None,
 ) -> dict:
     """
     Full ingestion pipeline for one SLA PDF.
     Returns {"chunks_created": int, "embedding_time_sec": float, "file_hash": str}.
+
+    `service_category` (optional) gets stored on every chunk's metadata so
+    later searches can scope to a specific service category for this
+    provider's documents.
     """
     if model is None:
         model = _get_embedding_model()
@@ -180,6 +192,7 @@ def ingest_pdf(
         source_file=Path(pdf_path).name,
         chunks=chunks,
         model=model,
+        service_category=service_category,
     )
     elapsed = time.time() - start
 
@@ -195,10 +208,17 @@ def search_sla(
     provider_filter: List[str] | None = None,
     top_k: int = 5,
     model: SentenceTransformer | None = None,
+    service_category: str | None = None,
 ) -> List[dict]:
     """
     Semantic search over SLA chunks.
-    Returns list of {"text": str, "provider": str, "page_number": int, "score": float}.
+    Returns list of {"text": str, "provider": str, "page_number": int,
+                     "source_file": str, "service_category": str | None,
+                     "score": float}.
+
+    When `service_category` is supplied, only chunks tagged with that
+    category at ingest time are considered. Returns [] if no chunks
+    match — caller can fall back to a less-strict search.
     """
     if model is None:
         model = _get_embedding_model()
@@ -213,7 +233,20 @@ def search_sla(
     # multilingual-e5 expects "query: " prefix for queries
     embedding = model.encode([f"query: {query}"], show_progress_bar=False).tolist()
 
-    where = {"provider": {"$in": provider_filter}} if provider_filter else None
+    # Combine provider + category filters using ChromaDB's $and operator
+    # so the where-clause stays valid when both are present.
+    conditions: list[dict] = []
+    if provider_filter:
+        conditions.append({"provider": {"$in": provider_filter}})
+    if service_category:
+        conditions.append({"service_category": service_category.lower()})
+
+    if not conditions:
+        where = None
+    elif len(conditions) == 1:
+        where = conditions[0]
+    else:
+        where = {"$and": conditions}
 
     results = collection.query(
         query_embeddings=embedding,
@@ -233,6 +266,7 @@ def search_sla(
             "provider": meta.get("provider"),
             "page_number": meta.get("page_number"),
             "source_file": meta.get("source_file"),   # original URL or filename
+            "service_category": meta.get("service_category"),
             "score": float(1 - dist),  # cosine similarity from distance
         })
     return output

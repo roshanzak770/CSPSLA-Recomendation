@@ -267,6 +267,7 @@ async def run_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
         providers_with_metrics=providers_with_metrics,
         weights=req.weights,
         lang=req.lang,
+        service_category=req.service_category,
     )
 
     if not pipeline_result.provider_results:
@@ -324,7 +325,14 @@ async def run_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
             meets_rto=r.meets_rto,
             meets_region=r.meets_region,
             compliance_tags=r.compliance_tags,
-            sla_url=provider_urls.get(r.provider_id),
+            # In service-category mode each row carries a service-specific
+            # sla_url. Fall back to the provider-level URL otherwise.
+            sla_url=(r.sla_url or provider_urls.get(r.provider_id)),
+            service_name=r.service_name,
+            service_uptime_pct=r.service_uptime_pct,
+            service_rto_hours=r.service_rto_hours,
+            service_rpo_hours=r.service_rpo_hours,
+            service_category=r.service_category,
         )
         for r in pipeline_result.provider_results
     ]

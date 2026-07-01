@@ -68,6 +68,10 @@ def retrain(training_data: List[dict]) -> bool:
     """
     Retrain XGBoost LambdaMART from accumulated feedback.
     training_data: list of feature dicts with 'relevance_score' key.
+    Each record SHOULD also carry 'query_id' so we can compute LambdaMART
+    groups correctly — XGBRanker requires one group per query. Records
+    without 'query_id' are collapsed into a single fallback group, which
+    is mathematically wrong but at least doesn't crash.
     Returns True on success.
     """
     try:
@@ -78,9 +82,38 @@ def retrain(training_data: List[dict]) -> bool:
     if len(training_data) < 10:
         return False
 
-    X = np.array([_feature_vector(r) for r in training_data])
-    y = np.array([r.get("relevance_score", 0.0) for r in training_data])
-    groups = np.array([r.get("group_size", len(training_data))])
+    # Sort by query_id so members of the same group are adjacent in X.
+    # XGBRanker's `group` parameter is a list of contiguous group sizes —
+    # it can't handle interleaved rows.
+    sorted_data = sorted(training_data, key=lambda r: str(r.get("query_id", "")))
+
+    X = np.array([_feature_vector(r) for r in sorted_data])
+
+    # XGBRanker's `rank:ndcg` objective requires labels to be non-negative
+    # integers (relevance grades 0..N). Our raw relevance scores are sums
+    # of signed signal weights (e.g. thumbs_up=+1.5, thumbs_down=-1.5),
+    # which can be negative or fractional. Discretise into 5 buckets that
+    # preserve ordering and map to standard NDCG relevance grades.
+    raw_y = np.array([r.get("relevance_score", 0.0) for r in sorted_data])
+
+    def _grade(score: float) -> int:
+        if score <= -1.0: return 0   # clear negative — thumbs_down territory
+        if score <   0.0: return 1   # mild negative (ignored, low-weight signals)
+        if score <   1.0: return 2   # neutral / weak positive (clicks)
+        if score <   2.0: return 3   # solid positive (accepted, thumbs_up)
+        return 4                     # strong positive (multiple positive signals)
+
+    y = np.array([_grade(float(s)) for s in raw_y])
+
+    # Compute one group size per distinct query_id, preserving sorted order.
+    from itertools import groupby
+    groups = np.array([
+        sum(1 for _ in members)
+        for _, members in groupby(sorted_data, key=lambda r: str(r.get("query_id", "")))
+    ])
+    # Sanity: groups must sum to len(X).
+    if int(groups.sum()) != len(X):
+        groups = np.array([len(X)])    # fallback: single group
 
     model = xgb.XGBRanker(
         objective="rank:ndcg",

@@ -93,7 +93,7 @@ async def ingest_selected_urls(req: IngestSelectedRequest, db: AsyncSession = De
 
     for url in req.urls:
         try:
-            data = await _ingest_url_to_db(url, req.provider, db, model)
+            data = await _ingest_url_to_db(url, req.provider, db, model, service_category=req.service_category)
             results.append(BatchIngestResult(url=url, chunks_created=data["chunks_created"]))
         except Exception as e:
             logger.warning("Failed to ingest %s: %s", url, e)

@@ -71,11 +71,14 @@ def _get_model():
     return _embedding_model
 
 
-async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) -> dict:
+async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model, service_category: str | None = None) -> dict:
     """
     Shared async helper: fetch URL, detect PDF vs HTML, chunk, embed, persist to DB.
     Returns {"chunks_created": int, "embedding_time_sec": float}.
     Raises HTTPException on failure.
+
+    `service_category` (optional) is stamped onto every ChromaDB chunk
+    so later RAG searches can scope answers to that service category.
     """
     import hashlib
     import time
@@ -119,7 +122,7 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
         await db.flush()
 
         try:
-            result = ingest_pdf(provider_name=provider, document_id=str(doc_id), pdf_path=str(dest), model=model)
+            result = ingest_pdf(provider_name=provider, document_id=str(doc_id), pdf_path=str(dest), model=model, service_category=service_category)
         except EmptyDocumentError as e:
             await db.rollback()
             dest.unlink(missing_ok=True)
@@ -212,6 +215,7 @@ async def _ingest_url_to_db(url: str, provider: str, db: AsyncSession, model) ->
             source_file=url,
             chunks=chunks_list,
             model=model,
+            service_category=service_category,
         )
     except Exception as e:
         await db.rollback()
@@ -285,6 +289,7 @@ async def ingest_sla(req: IngestRequest, db: AsyncSession = Depends(get_db), _: 
             document_id=str(doc_id),
             pdf_path=req.pdf_path,
             model=model,
+            service_category=req.service_category,
         )
     except EmptyDocumentError as e:
         await db.rollback()
@@ -337,10 +342,15 @@ async def ingest_sla(req: IngestRequest, db: AsyncSession = Depends(get_db), _: 
 async def upload_sla_pdf(
     provider: str = Form(...),
     file: UploadFile = File(...),
+    service_category: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     _: None = Depends(require_admin),
 ):
-    """Upload a PDF directly from the browser, save it, then run ingestion."""
+    """Upload a PDF directly from the browser, save it, then run ingestion.
+
+    `service_category` is an optional form field tying the document to a
+    specific service tier (compute / storage / database / network /
+    serverless). Stored on each chunk's ChromaDB metadata."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
@@ -386,7 +396,13 @@ async def upload_sla_pdf(
 
     model = _get_model()
     try:
-        result = ingest_pdf(provider_name=provider_name, document_id=str(doc_id), pdf_path=str(dest), model=model)
+        result = ingest_pdf(
+            provider_name=provider_name,
+            document_id=str(doc_id),
+            pdf_path=str(dest),
+            model=model,
+            service_category=service_category,
+        )
     except EmptyDocumentError as e:
         # Scanned PDF or otherwise empty — undo the half-written state
         # (Provider row stays; SLADocument row + on-disk PDF are removed)
@@ -495,7 +511,7 @@ async def delete_provider(provider_id: uuid.UUID, db: AsyncSession = Depends(get
 async def ingest_sla_url(req: IngestUrlRequest, db: AsyncSession = Depends(get_db), _: None = Depends(require_admin)):
     """Fetch a URL (PDF or HTML SLA page), extract text, and run the ingestion pipeline."""
     model = _get_model()
-    result = await _ingest_url_to_db(req.url, req.provider, db, model)
+    result = await _ingest_url_to_db(req.url, req.provider, db, model, service_category=req.service_category)
     return IngestResponse(**result)
 
 
@@ -543,6 +559,7 @@ async def ingest_sla_text(req: IngestTextRequest, db: AsyncSession = Depends(get
         source_file=fake_path,
         chunks=chunks_list,
         model=model,
+        service_category=req.service_category,
     )
     elapsed = time.time() - start
 

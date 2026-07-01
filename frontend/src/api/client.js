@@ -59,28 +59,35 @@ export const api = {
   deleteProvider: (id) => adminDel(`${BASE}/admin/provider/${id}`),
 
   // Query / Recommend
-  query: (text, weights, lang = 'English') => post(`${BASE}/query`, { text, weights, lang }),
+  query: (text, weights, lang = 'English', serviceCategory = null) =>
+    post(`${BASE}/query`, { text, weights, lang, service_category: serviceCategory }),
+  serviceCategories: () => get(`${BASE}/services/categories`),
   compare: (providers, metrics) =>
     get(`${BASE}/compare?providers=${encodeURIComponent(providers)}${metrics ? `&metrics=${encodeURIComponent(metrics)}` : ''}`),
 
   // Upload / Ingest
-  uploadPDF: (provider, file) => {
+  uploadPDF: (provider, file, serviceCategory = null) => {
     const fd = new FormData();
     fd.append('provider', provider);
     fd.append('file', file);
+    if (serviceCategory) fd.append('service_category', serviceCategory);
     return request(`${BASE}/admin/upload`, { method: 'POST', headers: { 'X-Admin-Key': ADMIN_KEY }, body: fd });
   },
-  ingestURL: (provider, url) => adminPost(`${BASE}/admin/ingest-url`, { provider, url }),
-  ingestText: (provider, text, title) => adminPost(`${BASE}/admin/ingest-text`, { provider, text, title }),
+  ingestURL: (provider, url, serviceCategory = null) =>
+    adminPost(`${BASE}/admin/ingest-url`, { provider, url, service_category: serviceCategory }),
+  ingestText: (provider, text, title, serviceCategory = null) =>
+    adminPost(`${BASE}/admin/ingest-text`, { provider, text, title, service_category: serviceCategory }),
 
   // Web Search
   searchSLA: (query, maxResults = 10) => post(`${BASE}/search/sla`, { query, max_results: maxResults }),
-  ingestSelected: (provider, urls) => post(`${BASE}/search/ingest-selected`, { provider, urls }),
+  ingestSelected: (provider, urls, serviceCategory = null) =>
+    post(`${BASE}/search/ingest-selected`, { provider, urls, service_category: serviceCategory }),
   autoFetch: (query, provider) => post(`${BASE}/search/auto-fetch`, { query, provider }),
   parseWebSLA: (url, provider) => post(`${BASE}/search/parse-web`, { url, provider }),
 
   // Chat / RAG
-  ask: (question, provider = null, lang = 'English') => post(`${BASE}/ask`, { question, provider, lang }),
+  ask: (question, provider = null, lang = 'English', serviceCategory = null) =>
+    post(`${BASE}/ask`, { question, provider, lang, service_category: serviceCategory }),
 
   // Feedback
   feedback: (queryId, providerId, signal) =>

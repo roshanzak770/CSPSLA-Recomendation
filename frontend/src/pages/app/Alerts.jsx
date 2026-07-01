@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Bell, FileText, TrendingUp, TrendingDown, FilePlus, AlertTriangle,
   ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Trash2, Plus,
   Mail, Zap, ShieldCheck, Brain, BarChart2, Target, CheckCircle2, XCircle,
+  Sparkles, X,
 } from 'lucide-react';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -65,21 +66,73 @@ const SIGNAL_META = {
 function ModelTrainingTab() {
   const qc = useQueryClient();
   const [retrainMsg, setRetrainMsg] = useState(null);
+  // Popup state for "training successfully finished" confirmation.
+  // We can't show this on the retrain *queue* callback because that just
+  // acknowledges Celery accepted the job — the model isn't actually written
+  // yet. So we track a baseline at queue time, then poll feedbackStats
+  // until either the model-exists flag flips true OR enough time passes
+  // for us to consider the training done.
+  const [successPopup, setSuccessPopup] = useState(null);   // { records } | null
+  const trainingWatchRef = useRef(null);                    // { baselineExists, baselineRecords, startedAt }
 
+  // Polling: while a retrain is "in flight" (queued but not yet observed),
+  // refetch stats every 2 s so we can detect the transition into "Trained".
+  // Idle: revert to the slow 30 s baseline cadence.
+  const isTraining = trainingWatchRef.current !== null;
   const { data: stats, isLoading, isError } = useQuery({
     queryKey: ['feedbackStats'],
     queryFn: api.feedbackStats,
-    refetchInterval: 30_000,
+    refetchInterval: isTraining ? 2_000 : 30_000,
   });
+
+  // React to stats updates while a retrain is being watched.
+  useEffect(() => {
+    const watch = trainingWatchRef.current;
+    if (!watch || !stats) return;
+
+    const modelNowExists = !!stats.xgboost_model_exists;
+    const elapsed = Date.now() - watch.startedAt;
+
+    // Success: model file now exists, OR was already trained and stats
+    // refreshed (indicating retrain rebuilt it — best-effort signal).
+    const becameTrained   = modelNowExists && !watch.baselineExists;
+    const rebuildLikely   = watch.baselineExists && elapsed > 4_000;  // already trained, give Celery a moment
+    if (becameTrained || rebuildLikely) {
+      trainingWatchRef.current = null;
+      setRetrainMsg(null);
+      setSuccessPopup({ records: stats.unique_training_pairs });
+      qc.invalidateQueries({ queryKey: ['feedbackStats'] });
+      return;
+    }
+
+    // Timeout: 60 s with no observed model flip — Celery probably failed
+    // or the worker isn't running. Tell the user honestly.
+    if (elapsed > 60_000) {
+      trainingWatchRef.current = null;
+      setRetrainMsg('Retrain did not complete within 60s. Check Celery worker logs.');
+      setTimeout(() => setRetrainMsg(null), 8_000);
+    }
+  }, [stats, qc]);
 
   const retrainMut = useMutation({
     mutationFn: api.retrainNow,
     onSuccess: (data) => {
-      setRetrainMsg(`Retrain queued (task ${data.task_id.slice(0, 8)}…)`);
+      // Capture the pre-training baseline so the polling effect above can
+      // detect the cold-start → trained transition (or the retrain of an
+      // already-trained model).
+      trainingWatchRef.current = {
+        baselineExists:  !!stats?.xgboost_model_exists,
+        baselineRecords: stats?.unique_training_pairs ?? 0,
+        startedAt:       Date.now(),
+      };
+      setRetrainMsg(`Training in progress… (task ${data.task_id.slice(0, 8)}…)`);
       qc.invalidateQueries({ queryKey: ['feedbackStats'] });
-      setTimeout(() => setRetrainMsg(null), 6000);
     },
-    onError: (err) => setRetrainMsg(`Error: ${err.message}`),
+    onError: (err) => {
+      trainingWatchRef.current = null;
+      setRetrainMsg(`Error: ${err.message}`);
+      setTimeout(() => setRetrainMsg(null), 6_000);
+    },
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Spinner size="lg" /></div>;
@@ -202,10 +255,10 @@ function ModelTrainingTab() {
         <div title={!stats.can_retrain ? 'Need 10+ training records to retrain' : undefined}>
           <button
             onClick={() => retrainMut.mutate()}
-            disabled={!stats.can_retrain || retrainMut.isPending}
+            disabled={!stats.can_retrain || retrainMut.isPending || isTraining}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {retrainMut.isPending ? <Spinner size="sm" /> : <Brain className="w-4 h-4" />}
+            {(retrainMut.isPending || isTraining) ? <Spinner size="sm" /> : <Brain className="w-4 h-4" />}
             Retrain Now
           </button>
         </div>
@@ -215,6 +268,57 @@ function ModelTrainingTab() {
           </motion.span>
         )}
       </div>
+
+      {/* Success modal — shown when training actually completes, not on queue.
+          Backed by the polling effect above. Closes on click of OK or the X. */}
+      <AnimatePresence>
+        {successPopup && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setSuccessPopup(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1,   y: 0 }}
+              exit={{    opacity: 0, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+              className="relative max-w-md w-[90%] mx-4 p-6 rounded-2xl bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-500/40 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setSuccessPopup(null)}
+                className="absolute top-3 right-3 p-1 rounded-md text-slate-500 hover:text-white hover:bg-white/5 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex flex-col items-center text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center mb-3">
+                  <Sparkles className="w-7 h-7 text-emerald-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-white">Retrain Successful</h3>
+                <p className="text-sm text-slate-300 mt-1">
+                  XGBoost model has been retrained on{' '}
+                  <span className="font-semibold text-emerald-400">{successPopup.records}</span>{' '}
+                  unique training record{successPopup.records === 1 ? '' : 's'}.
+                </p>
+                <p className="text-xs text-slate-500 mt-2">
+                  All future recommendations will use the updated model.
+                </p>
+
+                <button
+                  onClick={() => setSuccessPopup(null)}
+                  className="mt-5 px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 text-sm font-semibold transition-colors"
+                >
+                  OK
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

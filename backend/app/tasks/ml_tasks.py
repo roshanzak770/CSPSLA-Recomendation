@@ -35,6 +35,7 @@ def retrain_xgboost():
             ).first()
             if ranking:
                 rec.update({
+                    "query_id": query_id,            # needed by retrain() for LambdaMART group computation
                     "topsis_score": ranking.topsis_score or 0.0,
                     "cosine_similarity_score": 0.0,
                     "uptime_delta": 0.0,
@@ -43,7 +44,6 @@ def retrain_xgboost():
                     "compliance_overlap_pct": 0.0,
                     "cost_efficiency_score": 0.5,
                     "query_category_encoded": 0,
-                    "group_size": len(records_map),
                 })
                 training_data.append(rec)
 

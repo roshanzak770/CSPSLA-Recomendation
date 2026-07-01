@@ -54,6 +54,14 @@ class ProviderResult:
     sla_uptime_pct: Optional[float] = None
     sla_rto_hours: Optional[float] = None
     sla_url: Optional[str] = None
+    # When the request specified a service_category, these capture which
+    # specific service this row represents (e.g. "Amazon S3 Standard"
+    # instead of just "AWS") and its actual published SLA values.
+    service_name:       Optional[str]   = None
+    service_uptime_pct: Optional[float] = None
+    service_rto_hours:  Optional[float] = None
+    service_rpo_hours:  Optional[float] = None
+    service_category:   Optional[str]   = None
 
 
 @dataclass
@@ -200,38 +208,51 @@ def stage6_explain(
     top_results: List[ProviderResult],
     lang: str = "English",
 ) -> List[str]:
-    """Returns a list of explanations, one per result in top_results."""
+    """Returns a list of explanations, one per result in top_results.
+
+    Each provider's dict bundles the full SLA profile that drove its rank —
+    uptime, RTO, RPO, support response, penalty credit, region count,
+    compliance count, plus the service name when in service-category mode.
+    The LLM uses this to produce comparative, metric-specific reasoning
+    instead of generic "ranked because of strong SLA" filler.
+    """
     from app.services.llm_router import llm_router
-    explanations = []
-    all_provider_data = [
-        {
-            "rank": r.rank_position,
-            "name": r.provider_name,
-            "final_score": round(r.final_score, 1),
-            "topsis_score": round(r.topsis_score, 3),
-            "semantic_score": round(r.cosine_score, 3),
-            "uptime": r.sla_uptime_pct,
-            "rto_hours": r.sla_rto_hours,
-            "compliance": r.compliance_tags,
-            "meets_uptime": r.meets_uptime,
-            "meets_rto": r.meets_rto,
+
+    def _profile(r: ProviderResult) -> dict:
+        # Compact comparable profile. Keep keys short so the LLM has more
+        # tokens to spend on the actual reasoning rather than parsing.
+        return {
+            "rank":             r.rank_position,
+            "name":             r.provider_name,
+            "service":          r.service_name,                                  # None in legacy mode
+            "final_score":      round(r.final_score, 1),
+            "topsis":           round(r.topsis_score, 3),
+            "semantic":         round(r.cosine_score, 3),
+            # Prefer service-level values when available, fall back to
+            # provider-level so the prompt always sees real numbers.
+            "uptime_pct":       r.service_uptime_pct if r.service_uptime_pct is not None else r.sla_uptime_pct,
+            "rto_hours":        r.service_rto_hours  if r.service_rto_hours  is not None else r.sla_rto_hours,
+            "rpo_hours":        r.service_rpo_hours,
+            "compliance_count": len(r.compliance_tags or []),
+            "meets_uptime":     r.meets_uptime,
+            "meets_rto":        r.meets_rto,
         }
-        for r in top_results
-    ]
+
+    all_provider_data = [_profile(r) for r in top_results]
+    winner = all_provider_data[0] if all_provider_data else None
+
+    explanations: List[str] = []
     for r in top_results:
         try:
-            this_provider = {
-                "rank": r.rank_position,
-                "name": r.provider_name,
-                "final_score": round(r.final_score, 1),
-                "topsis_score": round(r.topsis_score, 3),
-                "semantic_score": round(r.cosine_score, 3),
-                "uptime": r.sla_uptime_pct,
-                "rto_hours": r.sla_rto_hours,
-                "compliance": r.compliance_tags,
-                "meets_uptime": r.meets_uptime,
-                "meets_rto": r.meets_rto,
-            }
+            this_provider = _profile(r)
+            # Gap-to-winner gives the LLM something concrete to anchor the
+            # explanation against — "ranked #3 with final 46.4, which is 6.9
+            # points behind Azure (53.2)" reads sharper than "ranked third".
+            gap = round((winner["final_score"] - this_provider["final_score"]), 1) if winner else 0.0
+            this_provider["gap_vs_winner"] = gap
+            this_provider["winner_name"]   = winner["name"]    if winner else None
+            this_provider["winner_service"] = winner.get("service") if winner else None
+
             explanation = llm_router.generate_explanation(
                 english_query, this_provider, all_provider_data, lang
             )
@@ -251,14 +272,23 @@ def run_pipeline(
     providers_with_metrics: list,          # list of (provider_id, provider_name, metrics_obj | None)
     weights: dict | None = None,
     lang: str = "English",                 # user-chosen response language
+    service_category: str | None = None,   # if set, rank per-service in this category
 ) -> PipelineResult:
     """
     Run all 6 stages and return a PipelineResult.
 
     providers_with_metrics: list of tuples
         (provider_id: str, provider_name: str, metrics: SLAMetrics | None)
+
+    service_category: when supplied, each provider is **expanded** into one
+        entry per service it offers in this category (see service_catalog.py).
+        Rankings then operate at the (provider, service) level — e.g. for
+        category="database" you get rows for DynamoDB Global, Cosmos DB,
+        Cloud Spanner, etc., each scored on its own published SLA. Set to
+        None for the legacy monolithic-per-provider behaviour.
     """
     from app.services.translation import to_english
+    from app.services.service_catalog import services_for
 
     # Translate frontend weight keys to TOPSIS criteria keys
     topsis_weights = _map_weights(weights) if weights else None
@@ -269,9 +299,68 @@ def run_pipeline(
     # Stage 1
     req = stage1_understand_query(english_query)
 
-    # Stage 2
-    provider_names = [p[1] for p in providers_with_metrics]
-    cosine_scores = stage2_retrieve_chunks(english_query, provider_names)
+    # ─── Service-category expansion ──────────────────────────────────────
+    # When a category is requested, fan each provider out into N entries —
+    # one per service the provider offers in that category. Each entry uses
+    # the service's specific SLA values via a SimpleNamespace shim shaped
+    # like the existing SLAMetrics objects. This keeps the rest of the
+    # pipeline (TOPSIS / XGB / explanation) completely unchanged.
+    service_meta: dict[str, dict] = {}    # synthetic_id -> {name, uptime, rto, rpo, url, category}
+    if service_category:
+        from types import SimpleNamespace
+        expanded: list = []
+        for provider_id, provider_name, metrics in providers_with_metrics:
+            for svc in services_for(service_category, provider_name):
+                # Synthetic ID stays a valid UUID string so persistence /
+                # downstream UUID conversion still works. We add a stable
+                # suffix derived from the service name so each (provider,
+                # service) row has its own identity.
+                synth_id = f"{provider_id}::{svc['name']}"
+                # Carry over regions + compliance from the provider-level
+                # metrics so the geographic-coverage and compliance-overlap
+                # criteria still contribute meaningfully.
+                regions    = list(getattr(metrics, "regions", []) or []) if metrics else []
+                compliance = list(getattr(metrics, "compliance", []) or []) if metrics else []
+                svc_metrics = SimpleNamespace(
+                    uptime_sla_pct       = svc.get("uptime_sla_pct"),
+                    rto_hours            = svc.get("rto_hours"),
+                    rpo_hours            = svc.get("rpo_hours"),
+                    support_response_min = svc.get("support_response_min"),
+                    penalty_credit_pct   = svc.get("penalty_credit_pct"),
+                    regions              = regions,
+                    compliance           = compliance,
+                )
+                # Composite name shown in TOPSIS output and the rank card
+                composite_name = f"{provider_name} — {svc['name']}"
+                expanded.append((synth_id, composite_name, svc_metrics))
+                service_meta[synth_id] = {
+                    "real_provider_id":   provider_id,
+                    "real_provider_name": provider_name,
+                    "service_name":       svc["name"],
+                    "service_uptime_pct": svc.get("uptime_sla_pct"),
+                    "service_rto_hours":  svc.get("rto_hours"),
+                    "service_rpo_hours":  svc.get("rpo_hours"),
+                    "sla_url":            svc.get("sla_url"),
+                    "service_category":   service_category,
+                }
+        # Only switch to expanded view if the catalog had entries for the
+        # requested category. Empty catalog → fall back to monolithic.
+        if expanded:
+            providers_with_metrics = expanded
+
+    # Stage 2 — semantic retrieval keyed by *real* provider name. In
+    # monolithic mode the composite name == real name. In service-category
+    # mode (e.g. "AWS — Amazon S3 Standard"), we look up cosine_scores by
+    # the underlying provider name; the helper below resolves either case.
+    def _real_name(synth_or_real_id: str, composite: str) -> str:
+        if synth_or_real_id in service_meta:
+            return service_meta[synth_or_real_id]["real_provider_name"]
+        return composite
+
+    cosine_query_names = [
+        _real_name(p[0], p[1]) for p in providers_with_metrics
+    ]
+    cosine_scores = stage2_retrieve_chunks(english_query, list(set(cosine_query_names)))
 
     # Stage 3 — filter to providers that have metrics
     topsis_inputs = []
@@ -292,9 +381,15 @@ def run_pipeline(
     # Stage 4 — TOPSIS
     topsis_results = topsis_rank(topsis_inputs, weights=topsis_weights or DEFAULT_WEIGHTS)
 
-    # Stage 5 — XGBoost re-ranking
+    # Stage 5 — XGBoost re-ranking. Cosine score lookup must resolve
+    # composite (provider, service) names back to the real provider name
+    # whose chunks were embedded in ChromaDB.
+    def _cosine_for(tr) -> float:
+        real = _real_name(tr.provider_id, tr.provider_name)
+        return cosine_scores.get(real, 0.0)
+
     xgb_records = [
-        _build_xgb_record(tr, cosine_scores, req, metrics_map.get(tr.provider_id))
+        _build_xgb_record(tr, {tr.provider_name: _cosine_for(tr)}, req, metrics_map.get(tr.provider_id))
         for tr in topsis_results
     ]
     xgb_scores, xgb_cold_start = predict(xgb_records)
@@ -302,7 +397,7 @@ def run_pipeline(
     # Compute final scores and sort
     scored = []
     for tr, xgb_s in zip(topsis_results, xgb_scores):
-        cosine_s = cosine_scores.get(tr.provider_name, 0.0)
+        cosine_s = _cosine_for(tr)
         final = (0.50 * tr.topsis_score) + (0.20 * cosine_s) + (0.30 * xgb_s)
         scored.append((tr, xgb_s, cosine_s, final))
 
@@ -313,10 +408,23 @@ def run_pipeline(
     for rank_pos, (tr, xgb_s, cosine_s, final) in enumerate(scored, start=1):
         m = metrics_map.get(tr.provider_id)
         provider_regions = [r.lower() for r in (m.regions or [])] if m else []
+        # Service-mode bookkeeping: pull the curated service metadata, and
+        # collapse the synthetic "<uuid>::service" id back to the real
+        # provider UUID so downstream code (Ranking inserts, UUID parsing
+        # in query.py) keeps working unchanged.
+        svc_meta = service_meta.get(tr.provider_id)
+        if svc_meta:
+            real_provider_id   = svc_meta["real_provider_id"]
+            real_provider_name = svc_meta["real_provider_name"]
+            service_url        = svc_meta.get("sla_url")
+        else:
+            real_provider_id   = tr.provider_id
+            real_provider_name = tr.provider_name
+            service_url        = None
 
         results.append(ProviderResult(
-            provider_id=tr.provider_id,
-            provider_name=tr.provider_name,
+            provider_id=real_provider_id,
+            provider_name=real_provider_name,
             rank_position=rank_pos,
             final_score=round(final * 100, 1),
             topsis_score=tr.topsis_score,
@@ -332,11 +440,31 @@ def run_pipeline(
             compliance_tags=list(m.compliance or []) if m else [],
             sla_uptime_pct=m.uptime_sla_pct if m else None,
             sla_rto_hours=m.rto_hours if m else None,
+            sla_url=service_url,
+            # Service-level fields populated only when in service mode
+            service_name=svc_meta["service_name"]       if svc_meta else None,
+            service_uptime_pct=svc_meta["service_uptime_pct"] if svc_meta else None,
+            service_rto_hours=svc_meta["service_rto_hours"]   if svc_meta else None,
+            service_rpo_hours=svc_meta["service_rpo_hours"]   if svc_meta else None,
+            service_category=svc_meta["service_category"]     if svc_meta else None,
         ))
 
-    # Stage 6 — individual explanation per provider
-    explanations = stage6_explain(english_query, results[:3], lang)
-    for r, expl in zip(results[:3], explanations):
+    # Stage 6 — explain ONE row per provider, picking the best-ranked row for
+    # each. In legacy mode this is identical to "top 3 results" because each
+    # provider appears exactly once. In service mode (e.g. 13 storage rows
+    # spread across 5 providers), this guarantees every provider gets an
+    # explanation on its strongest service — so AWS / Oracle / IBM rows
+    # aren't left blank just because Azure happens to occupy ranks 1-3.
+    # We also keep an absolute ceiling of 6 explanations to bound LLM cost.
+    explained: dict[str, "ProviderResult"] = {}
+    for r in results:
+        if r.provider_name not in explained:
+            explained[r.provider_name] = r
+        if len(explained) >= 6:
+            break
+    to_explain = list(explained.values())
+    explanations = stage6_explain(english_query, to_explain, lang)
+    for r, expl in zip(to_explain, explanations):
         if expl:
             r.explanation = expl
 

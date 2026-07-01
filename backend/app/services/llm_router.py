@@ -257,17 +257,44 @@ Query: {query}"""},
         return self._parse_json(raw)
 
     def generate_explanation(self, query: str, provider: dict, all_providers: list, lang: str = "English") -> str:
-        return _chat([
-            {"role": "system", "content": "You are a cloud SLA analyst. Write concise, factual explanations."},
-            {"role": "user",   "content": f"""User requirement: {query}
+        # Pick a useful comparison anchor: the winner (rank 1). If THIS
+        # provider is rank 1, the anchor flips to the closest competitor
+        # so the explanation can still say "beat X by Y points on metric Z".
+        is_winner = provider.get("rank") == 1
+        comparison_anchor = None
+        if all_providers:
+            if is_winner and len(all_providers) > 1:
+                comparison_anchor = all_providers[1]
+            elif not is_winner:
+                comparison_anchor = all_providers[0]
 
-All ranked providers (for context):
+        service_line = ""
+        if provider.get("service"):
+            service_line = f"This row represents the **{provider['service']}** service, not the whole {provider['name']} portfolio.\n"
+
+        return _chat([
+            {"role": "system", "content": (
+                "You are a cloud SLA analyst writing for an engineer who needs to defend a "
+                "provider-selection decision. Be specific, comparative, and number-driven. "
+                "Never write generic praise like 'strong SLA profile' — name the exact metric "
+                "and the exact number. Always reference at least one other provider by name."
+            )},
+            {"role": "user", "content": f"""User requirement: {query}
+
+All ranked providers (compact profiles):
 {json.dumps(all_providers, indent=2)}
 
-Now write 2-3 sentences specifically about why "{provider['name']}" ranked #{provider['rank']} (final_score={provider['final_score']}).
-Cite its specific SLA metrics (uptime, RTO, compliance). Compare briefly to the others where relevant.
-Respond in {lang}."""},
-        ], max_tokens=200, temperature=0.3)
+Focus provider:
+{json.dumps(provider, indent=2)}
+
+{service_line}Write 3-4 sentences explaining why "{provider['name']}" {'won the ranking' if is_winner else f'ranked #{provider.get("rank")}'} with a final score of {provider.get('final_score')}.
+Requirements for your answer:
+  1. Cite at least TWO specific SLA numbers from the focus provider (e.g. uptime 99.99%, RTO 1h, support 15min, credit 30%).
+  2. Compare directly to {comparison_anchor['name'] if comparison_anchor else 'one other provider in the list'} — name the metric where they differ and the numeric gap.
+  3. {"Mention what the closest competitor would have to improve to overtake." if is_winner else f"Mention which specific metric pushed the focus provider below rank 1, and by how much (gap_vs_winner = {provider.get('gap_vs_winner')})."}
+  4. If `meets_uptime` is false, point that out as a caveat. Don't gloss over weaknesses.
+Respond in {lang}. Plain prose, no bullets, no markdown headers."""},
+        ], max_tokens=280, temperature=0.25)
 
     def describe_sla_change(self, old_chunk: str, new_chunk: str) -> dict:
         raw = _chat([

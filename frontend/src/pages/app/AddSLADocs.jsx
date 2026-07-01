@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -88,6 +88,13 @@ const MAX_PDF_BYTES = MAX_PDF_MB * 1024 * 1024;
 export default function AddSLADocs() {
   const [section, setSection] = useState('upload');
   const [provider, setProvider] = useState('');
+  // Service category the user wants this document classified under. Empty
+  // string = unclassified (back-compat with old ingests). The dropdown
+  // only appears once a provider is selected, and warns the user if the
+  // (provider, category) pair has no curated catalog entry — they can
+  // still proceed, but the Recommend/Chat tabs won't surface this doc
+  // under that exact category until the catalog is extended.
+  const [serviceCategory, setServiceCategory] = useState('');
   const [uploadMode, setUploadMode] = useState('pdf');
   const [urlInput, setUrlInput] = useState('');
   const [textInput, setTextInput] = useState('');
@@ -106,19 +113,40 @@ export default function AddSLADocs() {
     queryKey: ['ingested'],
     queryFn: api.ingestedProviders,
   });
+  const { data: catalogData } = useQuery({
+    queryKey: ['serviceCategories'],
+    queryFn: api.serviceCategories,
+    staleTime: 60 * 60 * 1000,
+  });
+  const serviceCategoryList = catalogData?.categories || [];
+  const serviceCatalog = catalogData?.catalog || {};
+
+  // Reset category whenever provider changes — same reasoning as Chat.jsx.
+  // Different providers expose different service categories.
+  useEffect(() => { setServiceCategory(''); }, [provider]);
+
+  // When BOTH a provider and category are picked, check whether the
+  // catalog has any services for that pair. If not, surface a soft
+  // warning so the user knows the doc will be tagged but won't power
+  // service-mode rankings for this combo yet.
+  const categoryHasCuratedEntry = (() => {
+    if (!provider || !serviceCategory) return true;
+    const services = serviceCatalog?.[serviceCategory]?.[provider];
+    return Array.isArray(services) && services.length > 0;
+  })();
 
   const uploadPDF = useMutation({
-    mutationFn: ({ prov, file }) => api.uploadPDF(prov, file),
+    mutationFn: ({ prov, file, category }) => api.uploadPDF(prov, file, category || null),
     onSuccess: () => { toast.success('PDF ingested successfully'); qc.invalidateQueries(['ingested']); },
     onError: (e) => toast.error(e.message),
   });
   const ingestURL = useMutation({
-    mutationFn: ({ prov, url }) => api.ingestURL(prov, url),
+    mutationFn: ({ prov, url, category }) => api.ingestURL(prov, url, category || null),
     onSuccess: () => { toast.success('URL ingested'); qc.invalidateQueries(['ingested']); setUrlInput(''); },
     onError: (e) => toast.error(e.message),
   });
   const ingestText = useMutation({
-    mutationFn: ({ prov, text, title }) => api.ingestText(prov, text, title),
+    mutationFn: ({ prov, text, title, category }) => api.ingestText(prov, text, title, category || null),
     onSuccess: () => { toast.success('Text ingested'); qc.invalidateQueries(['ingested']); setTextInput(''); setTextTitle(''); },
     onError: (e) => toast.error(e.message),
   });
@@ -160,7 +188,7 @@ export default function AddSLADocs() {
         continue;
       }
       try {
-        await api.ingestURL(provider, url.trim());
+        await api.ingestURL(provider, url.trim(), serviceCategory || null);
         statuses[url] = 'ok';
       } catch (e) {
         statuses[url] = e.message;
@@ -203,7 +231,7 @@ export default function AddSLADocs() {
       toast.error(`PDF is ${sizeMB} MB — max allowed is ${MAX_PDF_MB} MB.`);
       return;
     }
-    uploadPDF.mutate({ prov: provider, file });
+    uploadPDF.mutate({ prov: provider, file, category: serviceCategory });
   }
 
   function handleDrop(e) {
@@ -261,6 +289,54 @@ export default function AddSLADocs() {
                       onChange={e => setProvider(e.target.value)}
                       className="px-3 py-1.5 rounded-lg text-sm border border-surface-border bg-transparent text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/50 w-32" />
                   </div>
+
+                  {/* Service-category cascade — appears AFTER provider chosen.
+                      Tags every ingestion so the Chat tab and per-service
+                      Recommend mode can scope to this doc. Optional: leaving
+                      it on "Unclassified" preserves the historical behaviour. */}
+                  {provider && serviceCategoryList.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-surface-border">
+                      <p className="text-xs text-slate-500 mb-3 font-medium uppercase tracking-wider">
+                        Service Category <span className="text-slate-600 normal-case font-normal">— optional, narrows where this doc applies</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setServiceCategory('')}
+                          className={`px-3 py-1.5 rounded-lg text-sm border transition-all ${
+                            serviceCategory === '' ? 'bg-slate-700/40 border-slate-500/50 text-slate-200' : 'border-surface-border text-slate-500 hover:text-white hover:border-slate-600'
+                          }`}
+                        >
+                          Unclassified
+                        </button>
+                        {serviceCategoryList.map(cat => (
+                          <button
+                            key={cat}
+                            onClick={() => setServiceCategory(cat)}
+                            className={`px-3 py-1.5 rounded-lg text-sm border transition-all capitalize ${
+                              serviceCategory === cat ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300' : 'border-surface-border text-slate-400 hover:text-white hover:border-slate-600'
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Soft warning when the (provider, category) pair
+                          has no curated catalog entry. The user can still
+                          ingest — the chunks will be tagged and become
+                          searchable — but service-mode rankings won't
+                          surface this until the catalog learns about it. */}
+                      {serviceCategory && !categoryHasCuratedEntry && (
+                        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>
+                            No curated <strong className="capitalize">{serviceCategory}</strong> services are listed for <strong>{provider}</strong> yet.
+                            The document will be ingested and tagged with this category, but service-mode rankings in the Recommend tab won't include it until the catalog is updated. The Chat tab will still scope to it via the tag.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </Card>
 
                 {/* Mode tabs */}
@@ -303,7 +379,7 @@ export default function AddSLADocs() {
                           const trimmed = urlInput.trim();
                           if (!provider) { toast.error('Select a provider first'); return; }
                           if (!trimmed)  { toast.error('Paste a URL first'); return; }
-                          ingestURL.mutate({ prov: provider, url: trimmed });
+                          ingestURL.mutate({ prov: provider, url: trimmed, category: serviceCategory });
                         }}
                         disabled={ingestURL.isPending}>
                         {ingestURL.isPending ? <Spinner size="sm" /> : 'Ingest'}
@@ -320,7 +396,7 @@ export default function AddSLADocs() {
                     <textarea value={textInput} onChange={e => setTextInput(e.target.value)}
                       rows={8} placeholder="Paste SLA text here…"
                       className="w-full px-4 py-2.5 rounded-lg bg-surface-card border border-surface-border text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/50 text-sm resize-none" />
-                    <Button onClick={() => provider && textInput && ingestText.mutate({ prov: provider, text: textInput, title: textTitle })}
+                    <Button onClick={() => provider && textInput && ingestText.mutate({ prov: provider, text: textInput, title: textTitle, category: serviceCategory })}
                       disabled={!provider || !textInput || ingestText.isPending}>
                       {ingestText.isPending ? <Spinner size="sm" /> : 'Ingest Text'}
                     </Button>

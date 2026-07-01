@@ -61,6 +61,11 @@ export default function Recommend() {
   const [showWeights, setShowWeights] = useState(false);
   const [weights, setWeights] = useState({ uptime: 1, support: 1, penalties: 1, geographic: 1, security: 1 });
   const [selectedLang, setSelectedLang] = useState('English');
+  // Service-category filter. "" = any (legacy per-provider mode); a category
+  // key like "storage" or "database" expands the ranking to one row per
+  // specific cloud service in that category, with that service's actual
+  // published SLA values driving TOPSIS.
+  const [serviceCategory, setServiceCategory] = useState('');
   const [results, setResults] = useState(null);
   const [feedbackSent, setFeedbackSent] = useState({});
   // Set of "<queryId>:<providerId>:<signal>" strings we've already emitted
@@ -70,9 +75,17 @@ export default function Recommend() {
   const [implicitFired, setImplicitFired] = useState(new Set());
 
   const { data: ingested = [] } = useQuery({ queryKey: ['ingested'], queryFn: api.ingestedProviders });
+  // Service catalog — fetched once, cached. Empty/error → dropdown shows
+  // only the "Any service" option, which is harmless.
+  const { data: catalogData } = useQuery({
+    queryKey: ['serviceCategories'],
+    queryFn: api.serviceCategories,
+    staleTime: 60 * 60 * 1000,   // 1h — catalog is static curated data
+  });
+  const serviceCategoryList = catalogData?.categories || [];
 
   const queryMut = useMutation({
-    mutationFn: () => api.query(query, weights, selectedLang),
+    mutationFn: () => api.query(query, weights, selectedLang, serviceCategory || null),
     onSuccess: (data) => { setResults(data); setFeedbackSent({}); setImplicitFired(new Set()); },
     onError: (e) => toast.error(e.message),
   });
@@ -115,21 +128,43 @@ export default function Recommend() {
             <h1 className="text-2xl font-bold text-white mb-1">Recommend</h1>
             <p className="text-slate-500 text-sm">Describe your workload to get ranked cloud provider recommendations.</p>
           </div>
-          {/* Language selector */}
-          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 shrink-0">
-            <Globe className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-            <select
-              value={selectedLang}
-              onChange={e => setSelectedLang(e.target.value)}
-              className="bg-transparent text-blue-300 text-xs font-medium focus:outline-none cursor-pointer"
-              title="Explanation language"
-            >
-              {LANGUAGES.map(l => (
-                <option key={l.code} value={l.code} className="bg-slate-900 text-slate-200">
-                  {l.label}
-                </option>
-              ))}
-            </select>
+          {/* Service-category + Language selectors */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {/* Service category — when set, rankings are per-service inside
+                that category instead of monolithic per-provider. */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <select
+                value={serviceCategory}
+                onChange={e => setServiceCategory(e.target.value)}
+                className="bg-transparent text-indigo-300 text-xs font-medium focus:outline-none cursor-pointer"
+                title="Filter ranking to a specific cloud service category"
+              >
+                <option value="" className="bg-slate-900 text-slate-200">Any service</option>
+                {serviceCategoryList.map(cat => (
+                  <option key={cat} value={cat} className="bg-slate-900 text-slate-200">
+                    {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Language selector */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
+              <Globe className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              <select
+                value={selectedLang}
+                onChange={e => setSelectedLang(e.target.value)}
+                className="bg-transparent text-blue-300 text-xs font-medium focus:outline-none cursor-pointer"
+                title="Explanation language"
+              >
+                {LANGUAGES.map(l => (
+                  <option key={l.code} value={l.code} className="bg-slate-900 text-slate-200">
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
         {selectedLang !== 'English' && (
@@ -249,10 +284,14 @@ export default function Recommend() {
             const name = r.provider_name;
             const score = r.final_score ?? 0;          // already 0–100
             const color = provColor(name);
-            const fbKey = r.provider_id || name;
+            // Composite key — in service mode the same provider appears
+            // multiple times (once per service), so a plain provider_id
+            // would collide on the React key and the feedback-dedup set.
+            const rowKey = r.service_name ? `${r.provider_id}::${r.service_name}` : (r.provider_id || name);
+            const fbKey  = rowKey;
             return (
               <motion.div
-                key={name}
+                key={rowKey}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
                 onClick={() => fireImplicitSignal(results.query_id, fbKey, 'clicked_provider')}
               >
@@ -267,12 +306,26 @@ export default function Recommend() {
                         {name.slice(0, 3).toUpperCase()}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-semibold text-white">{name}</h3>
                           {i === 0 && <Badge color="blue"><Zap className="w-2.5 h-2.5" /> Best Match</Badge>}
                           {i === 1 && <Badge color="purple">Runner-up</Badge>}
                         </div>
-                        {r.meets_uptime != null && (
+                        {/* Service-level row (only in service-category mode).
+                            Shows the specific product name + that service's
+                            actual published uptime — the real number that
+                            drove the ranking. */}
+                        {r.service_name && (
+                          <p className="text-xs text-indigo-300 mt-0.5">
+                            {r.service_name}
+                            {r.service_uptime_pct != null && (
+                              <span className="text-indigo-400/70 ml-1">
+                                · {r.service_uptime_pct}% uptime
+                              </span>
+                            )}
+                          </p>
+                        )}
+                        {r.meets_uptime != null && !r.service_name && (
                           <p className="text-xs text-slate-500">
                             Uptime: {r.sla_uptime_pct != null ? `${r.sla_uptime_pct}%` : '—'}
                             {r.meets_uptime ? ' ✓' : ' ✗'}

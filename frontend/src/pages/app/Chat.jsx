@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Bot, User, ChevronDown, ChevronUp, ExternalLink, Globe } from 'lucide-react';
+import { Send, Bot, User, ChevronDown, ChevronUp, ExternalLink, Globe, SlidersHorizontal, AlertCircle } from 'lucide-react';
 import Spinner from '../../components/ui/Spinner';
 import Card from '../../components/ui/Card';
 import { api } from '../../api/client';
@@ -37,6 +37,15 @@ function Message({ msg }) {
         {isUser ? <User className="w-4 h-4 text-white" /> : <Bot className="w-4 h-4 text-blue-400" />}
       </div>
       <div className={`max-w-[75%] space-y-1 ${isUser ? 'items-end' : ''}`}>
+        {/* Heads-up banner from /api/ask — for example "no storage-specific
+            SLA found for AWS, showing general AWS SLA". Lets the user know
+            the answer used a broader scope than they requested. */}
+        {!isUser && msg.info && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{msg.info}</span>
+          </div>
+        )}
         <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
           isUser ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-surface-card border border-surface-border text-slate-200 rounded-tl-sm'
         }`}>
@@ -104,14 +113,32 @@ export default function Chat() {
   ]);
   const [input, setInput] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
+  // Service-category filter. Only meaningful when a provider is also chosen
+  // — backend will narrow the RAG search to chunks tagged with this category
+  // and fall back to provider-only with a heads-up note if none exist.
+  const [serviceCategory, setServiceCategory] = useState('');
   const [selectedLang, setSelectedLang] = useState('English');
   const [typing, setTyping] = useState(false);
   const bottomRef = useRef();
 
   const { data: providers = [] } = useQuery({ queryKey: ['ingested'], queryFn: api.ingestedProviders });
+  // Service catalog drives the category dropdown — cached aggressively
+  // because it's static curated data, not per-tenant.
+  const { data: catalogData } = useQuery({
+    queryKey: ['serviceCategories'],
+    queryFn: api.serviceCategories,
+    staleTime: 60 * 60 * 1000,
+  });
+  const serviceCategoryList = catalogData?.categories || [];
+
+  // Reset the category selector whenever the provider changes — a
+  // pairing like (Oracle, serverless) might not exist while (AWS,
+  // serverless) does, so don't carry a stale value across providers.
+  useEffect(() => { setServiceCategory(''); }, [providerFilter]);
 
   const askMut = useMutation({
-    mutationFn: ({ question, provider, lang }) => api.ask(question, provider || null, lang),
+    mutationFn: ({ question, provider, lang, category }) =>
+      api.ask(question, provider || null, lang, category || null),
     onMutate: ({ question }) => {
       setMessages(m => [...m, { role: 'user', content: question }]);
       setTyping(true);
@@ -124,6 +151,7 @@ export default function Chat() {
           role: 'assistant',
           content: data.answer || data.response || 'No answer returned.',
           sources: data.sources || [],
+          info:    data.info || null,
           lang: variables.lang,
         },
       ]);
@@ -142,7 +170,7 @@ export default function Chat() {
     const q = input.trim();
     if (!q || askMut.isPending) return;
     setInput('');
-    askMut.mutate({ question: q, provider: providerFilter, lang: selectedLang });
+    askMut.mutate({ question: q, provider: providerFilter, lang: selectedLang, category: serviceCategory });
   }
 
   return (
@@ -178,6 +206,28 @@ export default function Chat() {
               <option value="">All providers</option>
               {providers.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
             </select>
+
+            {/* Service-category filter — cascade. Only meaningful once a
+                provider is chosen; before that, the dropdown stays hidden
+                so users aren't presented with a useless control. */}
+            {providerFilter && serviceCategoryList.length > 0 && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <select
+                  value={serviceCategory}
+                  onChange={e => setServiceCategory(e.target.value)}
+                  className="bg-transparent text-indigo-300 text-xs font-medium focus:outline-none cursor-pointer"
+                  title={`Narrow Q&A to a specific ${providerFilter} service category`}
+                >
+                  <option value="" className="bg-slate-900 text-slate-200">Any category</option>
+                  {serviceCategoryList.map(cat => (
+                    <option key={cat} value={cat} className="bg-slate-900 text-slate-200">
+                      {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
