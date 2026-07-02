@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   FilePlus2, Search, BarChart3, MessageSquare,
@@ -32,15 +32,21 @@ export default function Sidebar({ collapsed, onToggle }) {
         collapsed ? 'w-16' : 'w-56'
       )}
     >
-      {/* Logo */}
-      <div className="h-16 flex items-center px-4 border-b border-surface-border shrink-0">
+      {/* Logo — clicks anywhere on the icon or the "SLAwise" wordmark
+          route back to the landing page. Wrapped as a single Link so the
+          hit area is the whole logo cell, not just the wordmark. */}
+      <Link
+        to="/"
+        title="Back to home"
+        className="h-16 flex items-center px-4 border-b border-surface-border shrink-0 hover:bg-white/[0.03] transition-colors"
+      >
         <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
           <Cloud className="w-4 h-4 text-white" />
         </div>
         {!collapsed && (
           <span className="ml-3 font-bold text-white text-sm whitespace-nowrap">SLAwise</span>
         )}
-      </div>
+      </Link>
 
       {/* Nav */}
       <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">

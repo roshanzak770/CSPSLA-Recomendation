@@ -148,6 +148,7 @@ async def check_thresholds_now(db: AsyncSession = Depends(get_db)):
         select(AlertThreshold).where(AlertThreshold.active == True)
     )
     thresholds = thresholds_result.scalars().all()
+    logger.info("Threshold check invoked — %d active threshold(s)", len(thresholds))
 
     triggered = 0
     for t in thresholds:
@@ -160,29 +161,55 @@ async def check_thresholds_now(db: AsyncSession = Depends(get_db)):
             q = q.where(SLAMetrics.provider_id == t.provider_id)
 
         rows = (await db.execute(q)).all()
-        seen: set = set()
-        for metrics, pname in rows:
-            if metrics.provider_id in seen:
-                continue
-            seen.add(metrics.provider_id)
 
+        # Walk the rows for THIS provider (or all providers if unscoped),
+        # keeping the freshest non-null value of the target metric per
+        # provider. Previously the code did DISTINCT-ON-latest-row and
+        # skipped the whole check when the latest row happened to have
+        # metric=None — which is exactly what was silently swallowing
+        # every Azure alert because the last-ingested Azure row had
+        # uptime_sla_pct=NULL. Scanning per-provider fixes that.
+        freshest_by_provider: dict = {}   # provider_id -> (actual, pname)
+        for metrics, pname in rows:
+            if metrics.provider_id in freshest_by_provider:
+                continue
             actual = getattr(metrics, t.metric, None)
             if actual is None:
+                # Keep walking older rows for this provider — don't lock in
+                # a None just because the freshest row has it. Only record
+                # this provider once we find a real value or exhaust rows.
                 continue
+            freshest_by_provider[metrics.provider_id] = (actual, pname)
 
+        for actual, pname in freshest_by_provider.values():
             breached = (
                 (t.operator == "below" and actual < t.threshold_value) or
                 (t.operator == "above" and actual > t.threshold_value)
             )
             if breached:
+                logger.info(
+                    "Threshold BREACH: %s %s %s (actual=%s) — emailing %s",
+                    pname, t.metric, t.operator, actual, t.email,
+                )
                 sent = send_threshold_alert(
                     to_email=t.email, provider_name=pname,
                     metric=t.metric, operator=t.operator,
                     threshold_value=t.threshold_value, actual_value=actual,
                 )
                 if sent:
-                    t.last_triggered_at = datetime.now(timezone.utc)
+                    # Column is TIMESTAMP WITHOUT TIME ZONE — asyncpg raises
+                    # DataError if we pass an aware datetime. Build a
+                    # tz-aware UTC value (utcnow() is deprecated in 3.12+)
+                    # and strip the tzinfo before writing to match the
+                    # schema's naive-UTC convention used everywhere else.
+                    t.last_triggered_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     triggered += 1
+                else:
+                    logger.warning(
+                        "Threshold breach detected but email FAILED for %s → %s",
+                        pname, t.email,
+                    )
 
     await db.commit()
+    logger.info("Threshold check done — %d email(s) sent", triggered)
     return {"triggered": triggered, "checked": len(thresholds)}
